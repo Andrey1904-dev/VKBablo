@@ -1,0 +1,61 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: 40 33% 97%;
+  --fg: 230 20% 12%;
+  --muted: 40 22% 93%;
+  --muted-fg: 230 10% 42%;
+  --card: 0 0% 100%;
+  --card-fg: 230 20% 12%;
+  --line: 36 16% 86%;
+  --accent: 255 84% 66%;
+  --accent-fg: 0 0% 100%;
+  --sidebar: 230 18% 10%;
+  --sidebar-fg: 40 20% 94%;
+  --ok: 152 55% 36%;
+  --warn: 38 92% 50%;
+  --danger: 0 72% 51%;
+  color-scheme: light;
+}
+
+.dark {
+  --bg: 230 16% 8%;
+  --fg: 40 20% 96%;
+  --muted: 230 12% 14%;
+  --muted-fg: 230 10% 64%;
+  --card: 230 14% 12%;
+  --card-fg: 40 20% 96%;
+  --line: 230 10% 20%;
+  --accent: 255 84% 70%;
+  --accent-fg: 230 20% 10%;
+  --sidebar: 230 18% 7%;
+  --sidebar-fg: 40 20% 94%;
+  --ok: 152 50% 48%;
+  --warn: 38 92% 56%;
+  --danger: 0 78% 62%;
+  color-scheme: dark;
+}
+
+* { -webkit-tap-highlight-color: transparent; }
+
+html, body, #root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: hsl(var(--bg));
+  color: hsl(var(--fg));
+  font-family: Manrope, ui-sans-serif, system-ui, sans-serif;
+  font-feature-settings: "ss01" on;
+}
+
+.glass {
+  background: hsl(var(--card) / 0.8);
+  backdrop-filter: blur(16px);
+}
+
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
