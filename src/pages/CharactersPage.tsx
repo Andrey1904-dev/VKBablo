@@ -1,10 +1,90 @@
 import { useEffect, useState } from "react";
 import { getBackend } from "@/data";
-import { Badge, Card } from "@/components/ui";
+import { COMMUNITY_META } from "@shared/constants";
+import { Badge, Button, PageHead } from "@/components/ui";
+import { toast } from "@/components/toast";
+import type { Character } from "@shared/types";
+import { ChevronDown, Image as ImageIcon, Lock, ShieldAlert, Upload } from "lucide-react";
+
+function CharacterCard({ ch, onUpload }: { ch: Character; onUpload: (id: string, f: File) => void }) {
+  const [open, setOpen] = useState(false);
+  const meta = COMMUNITY_META[ch.communityId];
+  const refs = ch.references ?? [];
+
+  return (
+    <article className="character">
+      <div className="character-img">
+        {/* Внешность не выдумываем: пока нет утверждённых фото — честная заглушка. */}
+        <div className="char-placeholder">
+          <b style={{ background: meta?.color ?? "#8b5cf6" }}>{ch.name.slice(0, 1)}</b>
+          <small>{ch.appearanceStatus === "placeholder" ? "Референсы не загружены" : "Внешность задана референсами"}</small>
+        </div>
+        <span className="icon-btn" style={{ background: "#101014b5" }} title={ch.locked ? "Внешность заблокирована" : "Можно менять"}>
+          {ch.locked ? <Lock size={15} /> : <ImageIcon size={15} />}
+        </span>
+      </div>
+      <div>
+        <span className="character-community">{meta?.name ?? ch.communityId}</span>
+        <h2>{ch.name}</h2>
+        <p>{ch.description}</p>
+        <div className="char-footer">
+          <span>
+            <ImageIcon size={15} />
+            {refs.length} референсов
+          </span>
+          <Button variant="secondary" onClick={() => setOpen(!open)}>
+            {open ? "Свернуть" : "Открыть"} <ChevronDown size={15} style={{ transform: open ? "rotate(180deg)" : "none", transition: ".2s" }} />
+          </Button>
+        </div>
+      </div>
+      {open && (
+        <div className="char-details">
+          <div className="kv">
+            <b>Роль</b>
+            {ch.role}
+          </div>
+          <div className="kv">
+            <b>Характер</b>
+            {ch.personality}
+          </div>
+          <div className="kv">
+            <b>Нельзя менять</b>
+            {(ch.appearance?.neverChange ?? []).join("; ") || "—"}
+          </div>
+          <div className="kv">
+            <b>Особые приметы</b>
+            {(ch.appearance?.distinctive ?? []).join(" · ") || "Ожидают утверждённых референсов владельца"}
+          </div>
+          <div>
+            <div className="char-refs">
+              {refs.map((r) => (
+                <img key={r.id} src={r.filePath} alt="" />
+              ))}
+              {refs.length === 0 && <span className="empty-refs">Утверждённых референсов пока нет</span>}
+            </div>
+          </div>
+          <label className="upload-label">
+            <Upload size={15} />
+            <span>Загрузить утверждённый референс</span>
+            <input type="file" accept="image/*" onChange={(e) => e.target.files?.[0] && onUpload(ch.id, e.target.files[0])} />
+          </label>
+          {ch.appearanceStatus === "placeholder" && (
+            <div className="notice accent">
+              <ShieldAlert size={15} />
+              <span>
+                Генератор без identity-lock не обещает точное сходство с человеком. Загрузите эталонные фото владельца,
+                прежде чем рассчитывать на стабильную внешность.
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+    </article>
+  );
+}
 
 export default function CharactersPage() {
-  const [items, setItems] = useState<any[]>([]);
-  const [msg, setMsg] = useState("");
+  const [items, setItems] = useState<Character[]>([]);
 
   async function load() {
     setItems(await getBackend().characters());
@@ -14,46 +94,34 @@ export default function CharactersPage() {
   }, []);
 
   async function upload(id: string, file: File) {
-    await getBackend().uploadReference(id, file, "");
-    setMsg("Референс загружен. Внешность не меняется без снятия замка.");
-    load();
+    try {
+      await getBackend().uploadReference(id, file, "");
+      toast("Референс загружен. Внешность не меняется без снятия замка.");
+      await load();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Ошибка", "error");
+    }
   }
 
   return (
-    <div className="space-y-5 animate-fade-in">
-      <div>
-        <h1 className="text-2xl font-extrabold">Персонажи и референсы</h1>
-        <p className="text-sm text-muted-fg">
-          Внешность заблокирована. Генератор не должен подменять лица. Если провайдер не умеет держать референс — это написано прямо в студии, а не обещается.
-        </p>
-      </div>
-      {msg && <p className="text-sm text-muted-fg">{msg}</p>}
-      <div className="grid gap-4 lg:grid-cols-2">
+    <div className="page enter">
+      <PageHead
+        title="Персонажи"
+        description="Визуальные образы и правила для стабильной AI-генерации."
+        actions={<Badge tone={items.some((c) => c.locked) ? "purple" : "neutral"}>Внешность заблокирована</Badge>}
+      />
+      <div className="character-grid">
         {items.map((ch) => (
-          <Card key={ch.id} className="p-5 space-y-3">
-            <div className="flex items-start justify-between gap-2">
-              <div>
-                <h2 className="text-lg font-extrabold">{ch.name}</h2>
-                <p className="text-sm text-muted-fg">{ch.role} · {ch.communityId}</p>
-              </div>
-              <Badge className={ch.locked ? "bg-accent/15 text-accent" : "bg-muted"}>{ch.locked ? "внешность заблокирована" : "можно менять"}</Badge>
-            </div>
-            <p className="text-sm leading-6">{ch.description}</p>
-            <div className="rounded-xl bg-muted p-3 text-xs leading-5">
-              {(ch.appearance?.distinctive || []).join(" · ")}
-              <div className="mt-2 text-muted-fg">Нельзя: {(ch.appearance?.neverChange || []).join("; ")}</div>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {(ch.references || []).map((r: any) => (
-                <img key={r.id} src={r.filePath} alt="" className="h-16 w-16 rounded-xl object-cover" />
-              ))}
-            </div>
-            <label className="block text-sm">
-              Загрузить утверждённый референс
-              <input type="file" accept="image/*" className="mt-1 block" onChange={(e) => e.target.files?.[0] && upload(ch.id, e.target.files[0])} />
-            </label>
-          </Card>
+          <CharacterCard key={ch.id} ch={ch} onUpload={upload} />
         ))}
+        <div className="add-character">
+          <Upload size={25} />
+          <b>Эталонные изображения</b>
+          <span>
+            Персонажи и их правила согласованы владельцем и не создаются из интерфейса. Загружайте утверждённые
+            референсы в карточке персонажа — они хранятся в приватном хранилище.
+          </span>
+        </div>
       </div>
     </div>
   );

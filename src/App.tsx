@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useEffect, useState } from "react";
+import { Command } from "lucide-react";
 import { getBackend } from "@/data";
 import type { UserPublic } from "@shared/types";
 import { AppShell } from "@/components/layout";
@@ -43,8 +44,25 @@ export default function App() {
 
   if (loading) {
     return (
-      <div className="grid min-h-dvh place-items-center bg-bg text-muted-fg">
-        Загрузка VK AI Manager…
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "grid",
+          placeItems: "center",
+          background: "var(--bg, #09090b)",
+          color: "var(--muted, #9494a3)",
+          gap: 14,
+        }}
+      >
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
+          <div
+            className="brand-mark"
+            style={{ width: 44, height: 44, borderRadius: 12, display: "grid", placeItems: "center", background: "#8b5cf6", color: "#fff", boxShadow: "0 0 24px #8b5cf633" }}
+          >
+            <Command size={22} />
+          </div>
+          <span style={{ fontSize: 12, letterSpacing: ".04em" }}>Загрузка VKBablo…</span>
+        </div>
       </div>
     );
   }

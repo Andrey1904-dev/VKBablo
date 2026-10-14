@@ -1,76 +1,189 @@
+/**
+ * UI-кит дизайн-системы DesignVK: кнопки, бейджи, аватары, заголовки страниц,
+ * карточки статистики, поля ввода. Классы (.btn, .badge, .stat, .field…) определены
+ * в src/index.css и перенесены из макета без изменения визуала.
+ */
+import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from "react";
+import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/cn";
-import type { ButtonHTMLAttributes, InputHTMLAttributes, TextareaHTMLAttributes } from "react";
+
+/* ---------- Кнопка ---------- */
+export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 
 export function Button({
   className,
   variant = "primary",
   size = "md",
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "primary" | "ghost" | "outline" | "danger" | "soft";
-  size?: "sm" | "md" | "lg";
-}) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant; size?: "sm" | "md" }) {
   return (
     <button
-      className={cn(
-        "inline-flex items-center justify-center gap-2 rounded-xl font-semibold transition active:scale-[0.99] disabled:opacity-50 disabled:pointer-events-none",
-        size === "sm" && "h-9 px-3 text-sm",
-        size === "md" && "h-11 px-4 text-sm",
-        size === "lg" && "h-12 px-5",
-        variant === "primary" && "bg-accent text-accent-fg shadow-soft hover:opacity-90",
-        variant === "ghost" && "hover:bg-muted text-fg",
-        variant === "outline" && "border border-line bg-card hover:bg-muted",
-        variant === "danger" && "bg-danger text-white hover:opacity-90",
-        variant === "soft" && "bg-accent/12 text-accent hover:bg-accent/18",
-        className,
-      )}
+      className={cn("btn", `btn-${variant}`, size === "sm" && "sm", className)}
       {...props}
     />
   );
 }
 
-export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
+/* ---------- Бейдж со «светодиодом» (как в макете) ---------- */
+export type BadgeTone = "neutral" | "success" | "warning" | "purple" | "danger" | "sky";
+
+export function Badge({
+  children,
+  tone = "neutral",
+  className,
+}: {
+  children: ReactNode;
+  tone?: BadgeTone;
+  className?: string;
+}) {
   return (
-    <input
-      {...props}
-      className={cn(
-        "h-11 w-full rounded-xl border border-line bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-accent/40",
-        props.className,
-      )}
-    />
+    <span className={cn("badge", `badge-${tone}`, className)}>
+      <i />
+      {children}
+    </span>
   );
 }
 
-export function Textarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+/* ---------- Аватар сообщества ---------- */
+export function Avatar({
+  color,
+  short,
+  img,
+  size = "md",
+  title,
+}: {
+  color: string;
+  short?: string;
+  img?: string | null;
+  size?: "sm" | "md" | "lg";
+  title?: string;
+}) {
+  const letters = (short || title || "?").slice(0, 2).toUpperCase();
+  return (
+    <span className={`avatar avatar-${size}`} style={{ background: color }} title={title}>
+      {letters}
+      {img && (
+        <img
+          src={img}
+          alt=""
+          onError={(e) => {
+            // Если файл недоступен — показываем буквы на цветном фоне
+            (e.target as HTMLImageElement).style.display = "none";
+          }}
+        />
+      )}
+    </span>
+  );
+}
+
+/* ---------- Заголовок страницы ---------- */
+export function PageHead({
+  title,
+  description,
+  actions,
+}: {
+  title: string;
+  description: string;
+  actions?: ReactNode;
+}) {
+  return (
+    <header className="page-head">
+      <div>
+        <h1>{title}</h1>
+        <p>{description}</p>
+      </div>
+      {actions && <div className="head-actions">{actions}</div>}
+    </header>
+  );
+}
+
+/* ---------- Карточка статистики ---------- */
+export function Stat({
+  icon: Icon,
+  label,
+  value,
+  help,
+  accent,
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: string | number;
+  help: string;
+  accent?: boolean;
+}) {
+  return (
+    <div className={`stat ${accent ? "accent" : ""}`}>
+      <div>
+        <span>{label}</span>
+        <Icon size={17} />
+      </div>
+      <strong>{value}</strong>
+      <p>{help}</p>
+    </div>
+  );
+}
+
+/* ---------- Поля ввода ---------- */
+export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
+  return <input className={cn("input", className)} {...props} />;
+}
+
+export function Textarea({ className, style, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (
     <textarea
-      {...props}
-      className={cn(
-        "w-full rounded-xl border border-line bg-card px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-accent/40 min-h-[160px]",
-        props.className,
-      )}
-    />
-  );
-}
-
-export function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("rounded-2xl border border-line bg-card shadow-soft", className)} {...props} />;
-}
-
-export function Badge({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) {
-  return (
-    <span
-      className={cn("inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold", className)}
+      className={cn("textarea", className)}
+      style={{ minHeight: 92, padding: "11px", display: "block", ...style }}
       {...props}
     />
   );
 }
 
-export function Field({ label, children }: { label: string; children: React.ReactNode }) {
+export function Select({ className, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
+  return <select className={cn("select-btn", className)} {...props} />;
+}
+
+export function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: ReactNode;
+}) {
   return (
-    <label className="block space-y-1.5">
-      <span className="text-sm font-medium text-muted-fg">{label}</span>
+    <label className="field">
+      <span>{label}</span>
       {children}
+      {hint && <small>{hint}</small>}
     </label>
+  );
+}
+
+/* ---------- Переключатель (тумблер из макета) ---------- */
+export function Toggle({ on, onChange, title }: { on: boolean; onChange: (v: boolean) => void; title?: string }) {
+  return (
+    <button
+      type="button"
+      className={`toggle ${on ? "on" : ""}`}
+      onClick={() => onChange(!on)}
+      aria-pressed={on}
+      title={title}
+      aria-label={title}
+    >
+      <i />
+    </button>
+  );
+}
+
+/* ---------- Пустое состояние ---------- */
+export function Empty({ icon: Icon, title, text, action }: { icon: LucideIcon; title: string; text?: string; action?: ReactNode }) {
+  return (
+    <div className="empty">
+      <Icon size={28} />
+      <h2>{title}</h2>
+      {text && <p>{text}</p>}
+      {action}
+    </div>
   );
 }
