@@ -3,8 +3,17 @@ import react from "@vitejs/plugin-react";
 import path from "node:path";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), {
+    name: "build-revision",
+    transformIndexHtml: () => [{
+      tag: "meta",
+      attrs: { name: "vkbablo-build", content: process.env.GITHUB_SHA || "local" },
+      injectTo: "head",
+    }],
+  }],
   base: process.env.GITHUB_PAGES === "true" ? "/VKBablo/" : "/",
+  // Explicit Safari syntax baseline rather than Vite's moving browser default.
+  build: { target: ["es2020", "safari15"], cssTarget: "safari15" },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),

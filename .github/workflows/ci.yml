@@ -29,3 +29,20 @@ jobs:
 
       - name: Сборка фронтенда
         run: npm run build
+
+      - name: Production GitHub Pages build
+        run: npm run build:pages
+
+      - run: npx playwright install --with-deps chromium webkit
+
+      - name: Production render (desktop and iPhone WebKit)
+        run: npm run test:browser
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ci-browser-report
+          path: |
+            playwright-report
+            test-results
+          retention-days: 7

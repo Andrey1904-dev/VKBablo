@@ -11,7 +11,11 @@
     "build": "vite build",
     "start": "NODE_ENV=production tsx server/index.ts",
     "test": "tsx --test server/tests/*.test.ts",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.server.json"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.server.json",
+    "preview": "vite preview --host 0.0.0.0 --port 5173",
+    "test:browser": "playwright test",
+    "build:pages": "GITHUB_PAGES=true VITE_BACKEND_MODE=demo VITE_USE_HASH_ROUTER=true vite build",
+    "preview:pages": "GITHUB_PAGES=true vite preview --host 0.0.0.0 --port 5173"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.6",
@@ -21,6 +25,7 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^26.6.5",
     "@types/react": "^19.2.2",

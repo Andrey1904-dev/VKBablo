@@ -34,6 +34,7 @@ import { COMMUNITY_META } from "@shared/constants";
 import { addDays, moscowParts } from "@shared/moscow";
 import { fromDatetimeLocalMoscow } from "@/lib/time";
 import { isLightTheme, setTheme } from "@/lib/theme";
+import { readPreference, writePreference } from "@/lib/storage";
 import { Avatar, Button, Field, Input, Select, Textarea } from "./ui";
 import { Toaster, closeCreateModal, openCreateModal, toast, useCreateModalOpen } from "./toast";
 import { cn } from "@/lib/cn";
@@ -238,7 +239,7 @@ function CreateModal() {
 
 export function AppShell({ user }: { user: { name: string; email: string } }) {
   const [open, setOpen] = useState(false);
-  const [collapsed, setCollapsed] = useState(() => localStorage.getItem("vkai-sidebar") === "collapsed");
+  const [collapsed, setCollapsed] = useState(() => readPreference("vkai-sidebar") === "collapsed");
   const [paused, setPaused] = useState(false);
   const [pendingReview, setPendingReview] = useState(0);
   const [unread, setUnread] = useState(0);
@@ -274,7 +275,7 @@ export function AppShell({ user }: { user: { name: string; email: string } }) {
   }, [loc.pathname]);
 
   useEffect(() => {
-    localStorage.setItem("vkai-sidebar", collapsed ? "collapsed" : "expanded");
+    writePreference("vkai-sidebar", collapsed ? "collapsed" : "expanded");
   }, [collapsed]);
 
   // ⌘K / Ctrl+K — переход к поиску по публикациям (как на кнопке в топбаре)

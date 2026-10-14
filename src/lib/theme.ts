@@ -1,3 +1,5 @@
+import { readPreference, writePreference } from "./storage";
+
 /**
  * Тема оформления дизайн-системы DesignVK.
  * Тёмная — тема по умолчанию (как в макете), светлая включается классом `.light`.
@@ -10,20 +12,11 @@ export function isLightTheme(): boolean {
 export function setTheme(light: boolean): void {
   document.documentElement.classList.toggle("light", light);
   document.documentElement.classList.toggle("dark", !light);
-  try {
-    localStorage.setItem("vkai-theme", light ? "light" : "dark");
-  } catch {
-    /* приватный режим — просто без сохранения */
-  }
+  writePreference("vkai-theme", light ? "light" : "dark");
 }
 
 export function initTheme(): void {
-  let saved: string | null = null;
-  try {
-    saved = localStorage.getItem("vkai-theme");
-  } catch {
-    /* ignore */
-  }
+  const saved = readPreference("vkai-theme");
   // Макет DesignVK по умолчанию тёмный; сохранённый выбор владельца приоритетнее.
   setTheme(saved === "light");
 }
