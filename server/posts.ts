@@ -580,9 +580,20 @@ export function assertApprovedVersion(post: Post) {
 export async function scheduleToVk(id: string, userId: number | null): Promise<Post> {
   const p = getPost(id);
   assertApprovedVersion(p);
+  if (setting("automation_paused", "0") === "1") {
+    throw new HttpError(423, "Автоматизация на паузе");
+  }
   const unix = Math.floor(new Date(p.scheduledAt).getTime() / 1000);
   if (unix < Math.floor(Date.now() / 1000) + 60) {
-    throw new HttpError(400, "Время публикации уже прошло или слишком близко");
+    throw new HttpError(400, "Время публикации уже прошло или слишком близко. Просроченные посты не публикуются автоматически.");
+  }
+  const idempotencyKey = `pub:${p.id}:${p.approvedHash}`;
+  const existingJob = get<{ status: string }>(
+    "SELECT status FROM publication_jobs WHERE idempotency_key = ?",
+    idempotencyKey,
+  );
+  if (existingJob && (existingJob.status === "done" || existingJob.status === "running")) {
+    throw new HttpError(409, "Эта версия уже отправлена или отправляется");
   }
   const mode = setting("app_mode", "test");
   const vk = getVk();
@@ -622,6 +633,19 @@ export async function scheduleToVk(id: string, userId: number | null): Promise<P
       postId,
       nowIso(),
       id,
+    );
+    run(
+      `INSERT INTO publication_jobs (id, post_id, version_hash, scheduled_at, vk_post_id, status, idempotency_key, attempts, last_error, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'done', ?, 1, NULL, ?, ?)
+       ON CONFLICT(idempotency_key) DO UPDATE SET status = 'done', vk_post_id = excluded.vk_post_id, updated_at = excluded.updated_at`,
+      nid("pj"),
+      id,
+      p.approvedHash,
+      p.scheduledAt,
+      postId,
+      idempotencyKey,
+      nowIso(),
+      nowIso(),
     );
     notify({
       type: "scheduled",

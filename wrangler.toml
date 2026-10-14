@@ -1,0 +1,24 @@
+name = "vk-ai-manager"
+main = "server/worker.ts"
+compatibility_date = "2025-10-11"
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+# Secrets (wrangler secret put):
+# SESSION_SECRET
+# ENCRYPTION_KEY
+# SUPABASE_URL
+# SUPABASE_ANON_KEY
+# SUPABASE_SERVICE_ROLE_KEY
+# AI_API_KEY (optional)
+
+[vars]
+APP_MODE = "test"
+AI_MONTHLY_LIMIT_USD = "20"

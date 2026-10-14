@@ -34,16 +34,16 @@ export function openMemoryDb(): DatabaseSync {
 }
 
 function migrate(database: DatabaseSync) {
-  const sqlPath = join(ROOT, "migrations", "0001_init.sql");
-  const sql = existsSync(sqlPath)
-    ? readFileSync(sqlPath, "utf8")
-    : "";
-  if (sql) database.exec(sql);
-  database
-    .prepare(
-      "INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)",
-    )
-    .run("0001_init", nowIso());
+  for (const id of ["0001_init", "0002_jobs_stats"]) {
+    const sqlPath = join(ROOT, "migrations", `${id}.sql`);
+    if (!existsSync(sqlPath)) continue;
+    database.exec(readFileSync(sqlPath, "utf8"));
+    database
+      .prepare(
+        "INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)",
+      )
+      .run(id, nowIso());
+  }
 }
 
 export function all<T>(sql: string, ...params: unknown[]): T[] {
