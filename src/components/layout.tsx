@@ -19,7 +19,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { getBackend } from "@/data";
 import { Button } from "./ui";
 import { moscowNowLabel } from "@/lib/time";
 import { cn } from "@/lib/cn";
@@ -43,12 +43,15 @@ export function AppShell({ user }: { user: { name: string; email: string } }) {
   const [mode, setMode] = useState("test");
   const nav = useNavigate();
 
+  const backend = getBackend();
+  const backendInfo = backend.info;
+
   async function refresh() {
     try {
-      const d = await api<{ automationPaused: boolean; mode: string; unread: number }>("/api/dashboard");
+      const [d, n] = await Promise.all([backend.dashboard(), backend.notifications()]);
       setPaused(d.automationPaused);
       setMode(d.mode);
-      setUnread(d.unread);
+      setUnread(n.unread);
     } catch {
       /* ignore */
     }
@@ -61,7 +64,7 @@ export function AppShell({ user }: { user: { name: string; email: string } }) {
   }, []);
 
   async function togglePause() {
-    await api(paused ? "/api/automation/resume" : "/api/automation/pause", { method: "POST" });
+    await backend.setAutomationPaused(!paused);
     refresh();
   }
 
@@ -71,7 +74,7 @@ export function AppShell({ user }: { user: { name: string; email: string } }) {
   }
 
   async function onLogout() {
-    await api("/api/auth/logout", { method: "POST" });
+    await backend.auth.signOut();
     nav("/login");
     location.reload();
   }
@@ -113,7 +116,9 @@ export function AppShell({ user }: { user: { name: string; email: string } }) {
       </nav>
       <div className="p-4 space-y-3">
         <div className="rounded-xl bg-white/5 px-3 py-2 text-[11px] text-sidebar-fg/70">
-          {mode === "test" ? "Тестовый режим · VK dry-run" : "Согласование · реальный VK"}
+          <div className="font-semibold text-white/90">Режим: {backendInfo.label}</div>
+          <div>{mode === "test" ? "Тестовый режим · VK dry-run" : "Согласование · реальный VK"}</div>
+          {backendInfo.demo && <div className="mt-1 text-amber-300">Данные демонстрационные</div>}
         </div>
         <button onClick={onLogout} className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm text-sidebar-fg/70 hover:bg-white/5">
           <LogOut size={16} /> Выйти

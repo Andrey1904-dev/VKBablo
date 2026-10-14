@@ -400,6 +400,15 @@ Vault: `vk_ai_worker_url`, `vk_ai_worker_secret` (для Cron).
 
 ### 8.1 Задача
 
+> **Прогресс (ветка `arena/23498f80-vkbablo`):** переведены оболочка и вход — `src/App.tsx`
+> (гейт через `auth.status()`), `src/components/layout.tsx` (пауза, выход, счётчик непрочитанных
+> через `dashboard()`/`notifications()`, индикатор `backend.label` и пометка «демонстрационные данные»),
+> `src/pages/LoginPage.tsx` (`createOwner`/`signIn`). Переведено 3 из 14 файлов; остальные 11 страниц
+> и `src/data/*` по-прежнему используют `@/lib/api` (в `data/local.ts` и `data/supabase.ts` это ожидаемо
+> для `ApiError`). Проверка в браузере не выполнена (нет Chromium); проверено: typecheck, test, build,
+> sync --check, dev-сервер отдаёт модули.
+
+
 Перевести страницы с прямых вызовов `@/lib/api` на `getBackend()` из `@/data`, **сохранив
 текущий дизайн, разметку, компоненты и UX**. Никаких перерисовок «с нуля».
 

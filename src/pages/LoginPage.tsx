@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { api } from "@/lib/api";
+import { getBackend } from "@/data";
+import type { UserPublic } from "@shared/types";
 import { Button, Field, Input } from "@/components/ui";
 
 export default function LoginPage({
@@ -7,7 +8,7 @@ export default function LoginPage({
   onDone,
 }: {
   setup: boolean;
-  onDone: (u: { id: number; email: string; name: string; role: string }) => void;
+  onDone: (u: UserPublic) => void;
 }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -20,12 +21,11 @@ export default function LoginPage({
     setError("");
     setPending(true);
     try {
-      const path = setup ? "/api/auth/setup" : "/api/auth/login";
-      const data = await api<{ user: { id: number; email: string; name: string; role: string } }>(path, {
-        method: "POST",
-        body: JSON.stringify({ email, password, name }),
-      });
-      onDone(data.user);
+      const backend = getBackend();
+      const user = setup
+        ? await backend.auth.createOwner(email, password, name)
+        : await backend.auth.signIn(email, password);
+      onDone(user);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Ошибка");
     } finally {
