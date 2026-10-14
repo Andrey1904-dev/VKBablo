@@ -59,9 +59,20 @@ jobs:
       - name: Проверка живого сайта
         run: |
           url="${{ steps.deployment.outputs.page_url }}"
-          sleep 8
-          html="$(curl -fsSL "$url")" || { echo "Не удалось загрузить $url"; exit 1; }
-          echo "$html" | grep -q 'assets/index-.*\.js' || { echo "Сайт не отдаёт собранный бандл. HTML:"; echo "$html" | head -30; exit 1; }
-          asset="$(echo "$html" | grep -o 'assets/index-[^"]*\.js' | head -1)"
-          curl -fsSL -o /dev/null "$url$asset" || { echo "Бандл недоступен: $url$asset"; exit 1; }
-          echo "✅ Сайт отдаёт собранный интерфейс: $url$asset"
+          asset=""
+          for i in $(seq 1 12); do
+            html="$(curl -fsSL "$url" || true)"
+            if echo "$html" | grep -q 'assets/index-.*\.js'; then
+              asset="$(echo "$html" | grep -o 'assets/index-[^"]*\.js' | head -1)"
+              if curl -fsSL -o /dev/null "$url$asset"; then
+                echo "✅ Сайт отдаёт собранный интерфейс: $url$asset"
+                exit 0
+              fi
+            fi
+            echo "Попытка $i/12: сайт ещё не отдаёт сборку (возможно, распространяется CDN), ждём 10 сек…"
+            sleep 10
+          done
+          echo "❌ Спустя 2 минуты сайт не отдаёт собранный бандл."
+          echo "Последний ответ:"; curl -fsSL "$url" 2>/dev/null | head -30 || echo "(нет ответа)"
+          echo "Если это повторяется — включите Settings → Pages → Source: GitHub Actions и запустите workflow заново."
+          exit 1
