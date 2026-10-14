@@ -1,46 +1,19 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, STATUS_LABEL, STATUS_TONE, COMMUNITY_COLOR } from "@/lib/api";
+import { STATUS_LABEL, STATUS_TONE, COMMUNITY_COLOR } from "@/lib/api";
+import { getBackend } from "@/data";
 import { Badge, Button, Card } from "@/components/ui";
 import { formatMoscow } from "@/lib/time";
 
-type Dash = {
-  ready: number;
-  pendingReview: number;
-  scheduled: number;
-  published: number;
-  errors: number;
-  missedSlots: number;
-  automationPaused: boolean;
-  mode: string;
-  nextPosts: Array<{
-    id: string;
-    communityId: string;
-    title: string;
-    status: string;
-    scheduledAt: string;
-  }>;
-  byCommunity: Array<{
-    id: string;
-    name: string;
-    color: string;
-    pending: number;
-    scheduled: number;
-    published: number;
-    errors: number;
-  }>;
-  spendUsdMonth: number;
-  spendLimitUsd: number;
-  supabase: { configured: boolean };
-};
+import type { DashboardData } from "@shared/types";
 
 export default function DashboardPage() {
-  const [data, setData] = useState<Dash | null>(null);
+  const [data, setData] = useState<DashboardData | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
 
   async function load() {
-    setData(await api<Dash>("/api/dashboard"));
+    setData(await getBackend().dashboard());
   }
   useEffect(() => {
     load();
@@ -52,9 +25,9 @@ export default function DashboardPage() {
     setBusy(true);
     setMsg("");
     try {
-      const r = await api<{ queued: number }>("/api/automation/prepare", { method: "POST" });
+      const r = await getBackend().prepareUpcoming();
       setMsg(`В очередь поставлено слотов: ${r.queued}. Генерация идёт в фоне.`);
-      await api("/api/automation/tick", { method: "POST" });
+      await getBackend().runWorker("tick");
       await load();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Ошибка");
@@ -87,9 +60,9 @@ export default function DashboardPage() {
         </Button>
       </div>
 
-      {!data.supabase?.configured && (
+      {data.backend.kind !== "supabase" && (
         <Card className="border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm">
-          Supabase пока не подключён. Данные хранятся локально на этом сервере. Инструкция — в Настройках.
+          Supabase пока не подключён. {getBackend().info.kind === "demo" ? "Данные демонстрационные и не публикуются в VK." : "Работает локальный стенд."} Инструкция — в Настройках.
         </Card>
       )}
       {data.missedSlots > 0 && (

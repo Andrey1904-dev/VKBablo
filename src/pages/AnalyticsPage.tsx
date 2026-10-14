@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { getBackend } from "@/data";
 import { Card } from "@/components/ui";
 import { formatMoscow } from "@/lib/time";
 
 export default function AnalyticsPage() {
   const [data, setData] = useState<any>(null);
   useEffect(() => {
-    api("/api/analytics").then(setData);
+    getBackend().analytics().then(setData).catch(console.error);
   }, []);
   if (!data) return <p className="text-muted-fg">Загрузка…</p>;
 

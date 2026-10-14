@@ -250,7 +250,7 @@ export class DemoBackend implements Backend {
       description: meta.description,
       theme: meta.theme,
       color: meta.color,
-      avatarUrl: `/avatars/${id}.svg`,
+      avatarUrl: `${import.meta.env.BASE_URL}avatars/${id}.svg`,
       vkGroupId: runtime?.vkGroupId || null,
       vkScreenName: null,
       vkConnected: Boolean(runtime?.vkConnected),

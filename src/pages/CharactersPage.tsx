@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { getBackend } from "@/data";
 import { Badge, Card } from "@/components/ui";
 
 export default function CharactersPage() {
@@ -7,17 +7,14 @@ export default function CharactersPage() {
   const [msg, setMsg] = useState("");
 
   async function load() {
-    const r = await api<{ characters: any[] }>("/api/characters");
-    setItems(r.characters);
+    setItems(await getBackend().characters());
   }
   useEffect(() => {
     load();
   }, []);
 
   async function upload(id: string, file: File) {
-    const fd = new FormData();
-    fd.append("file", file);
-    await api(`/api/characters/${id}/references`, { method: "POST", body: fd });
+    await getBackend().uploadReference(id, file, "");
     setMsg("Референс загружен. Внешность не меняется без снятия замка.");
     load();
   }

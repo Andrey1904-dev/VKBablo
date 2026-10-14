@@ -1,14 +1,15 @@
 import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { getBackend } from "@/data";
+import type { ApplicationSettings } from "@shared/types";
 import { Button, Card, Field, Input } from "@/components/ui";
 
 export default function SettingsPage() {
-  const [s, setS] = useState<any>(null);
+  const [s, setS] = useState<ApplicationSettings | null>(null);
   const [aiKey, setAiKey] = useState("");
   const [msg, setMsg] = useState("");
 
   async function load() {
-    setS(await api("/api/settings"));
+    setS(await getBackend().settings());
   }
   useEffect(() => {
     load();
@@ -17,7 +18,7 @@ export default function SettingsPage() {
   async function save(patch: Record<string, unknown>) {
     setMsg("");
     try {
-      await api("/api/settings", { method: "PATCH", body: JSON.stringify(patch) });
+      await getBackend().saveSettings(patch);
       setMsg("Сохранено");
       load();
     } catch (e) {
@@ -27,7 +28,7 @@ export default function SettingsPage() {
 
   async function testAi() {
     try {
-      const r = await api<{ ok: boolean; sample?: string; error?: string; provider?: string }>("/api/settings/test-ai", { method: "POST" });
+      const r = await getBackend().testAi();
       setMsg(r.ok ? `AI отвечает (${r.provider}): ${r.sample}` : r.error || "ошибка");
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Ошибка");
@@ -56,16 +57,16 @@ export default function SettingsPage() {
       <Card className="p-5 space-y-3">
         <h2 className="font-bold">Supabase</h2>
         <p className="text-sm leading-6 text-muted-fg">
-          {s.supabase?.configured
-            ? "Сервер видит SUPABASE_URL и service role. Анонимный ключ не равен service role и не должен попадать в чат."
-            : "Проект ещё не подключён. Локальная SQLite база работает для разработки. Чтобы перейти в облако: создайте проект в Supabase Dashboard, выполните SQL из папки supabase/migrations и supabase/policies.sql, затем задайте секреты на сервере / в Cloudflare — не в этом окне."}
+          {getBackend().info.kind === "supabase"
+            ? "Клиент настроен на Supabase. Наличие серверных секретов проверяется отдельно в Edge Functions; service role не должен попадать в браузер или чат."
+            : "Проект ещё не подключён. В демо-режиме данные хранятся в браузере; локальный стенд использует SQLite. Чтобы перейти в облако: создайте проект в Supabase Dashboard, выполните SQL из папки supabase/migrations (включая миграцию RLS), затем задайте секреты на сервере / в Supabase Edge Functions — не в этом окне."}
         </p>
         <ul className="list-disc pl-5 text-sm text-muted-fg space-y-1">
           <li>SUPABASE_URL — да</li>
           <li>SUPABASE_ANON_KEY — да, можно в VITE_ для Realtime</li>
-          <li>SUPABASE_SERVICE_ROLE_KEY — только Worker/сервер</li>
+          <li>SUPABASE_SERVICE_ROLE_KEY — только Supabase Edge Functions</li>
         </ul>
-        <div className="text-xs">URL задан: {s.supabase?.url ? "да" : "нет"} · anon: {s.supabase?.anon ? "да" : "нет"} · service: {s.supabase?.service ? "да" : "нет"}</div>
+        <div className="text-xs">URL задан: {getBackend().info.supabaseUrl ? "да" : "нет"} · anon: {getBackend().info.hasAnonKey ? "да" : "нет"} · серверные секреты: проверяются отдельно</div>
       </Card>
 
       <Card className="p-5 space-y-3">
@@ -91,10 +92,10 @@ export default function SettingsPage() {
           <Input defaultValue={s.aiBaseUrl} onBlur={(e) => save({ aiBaseUrl: e.target.value })} placeholder="https://api.openai.com/v1" />
         </Field>
         <Field label="API-ключ (не отображается после сохранения)">
-          <Input type="password" value={aiKey} onChange={(e) => setAiKey(e.target.value)} placeholder={s.aiConfigured ? "ключ задан · введите новый чтобы заменить" : ""} />
+          <Input type="password" value={aiKey} onChange={(e) => setAiKey(e.target.value)} placeholder="Введите новый ключ для сохранения на сервере" />
         </Field>
         <div className="flex gap-2">
-          <Button onClick={() => save({ aiApiKey: aiKey })}>Сохранить ключ</Button>
+          <Button onClick={async () => { try { await getBackend().saveAiKey(aiKey); setAiKey(""); setMsg("Ключ сохранён сервером"); await load(); } catch (e) { setMsg(e instanceof Error ? e.message : "Ошибка"); } }}>Сохранить ключ</Button>
           <Button variant="outline" onClick={testAi}>Проверить AI</Button>
         </div>
         <Field label="Лимит $/мес">

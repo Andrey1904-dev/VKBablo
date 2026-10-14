@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api } from "@/lib/api";
+import { getBackend } from "@/data";
 import { Button, Card } from "@/components/ui";
 import { formatMoscow } from "@/lib/time";
 
@@ -8,7 +8,7 @@ export default function NotificationsPage() {
   const [items, setItems] = useState<any[]>([]);
 
   async function load() {
-    const r = await api<{ items: any[] }>("/api/notifications");
+    const r = await getBackend().notifications();
     setItems(r.items);
   }
   useEffect(() => {
@@ -19,7 +19,7 @@ export default function NotificationsPage() {
     <div className="space-y-5 animate-fade-in max-w-3xl">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-extrabold">Уведомления</h1>
-        <Button variant="outline" size="sm" onClick={() => api("/api/notifications/read", { method: "POST", body: "{}" }).then(load)}>
+        <Button variant="outline" size="sm" onClick={() => getBackend().markNotificationsRead().then(load)}>
           Прочитать все
         </Button>
       </div>
