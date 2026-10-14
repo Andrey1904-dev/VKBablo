@@ -1,25 +1,14 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api } from "@/lib/api";
+import { getBackend } from "@/data";
 import { Badge, Card } from "@/components/ui";
 
-type Community = {
-  id: string;
-  name: string;
-  shortName: string;
-  tagline: string;
-  description: string;
-  color: string;
-  avatarUrl: string;
-  vkConnected: boolean;
-  schedule: string[];
-  status: string;
-};
+import type { Community } from "@shared/types";
 
 export default function CommunitiesPage() {
   const [items, setItems] = useState<Community[]>([]);
   useEffect(() => {
-    api<{ communities: Community[] }>("/api/communities").then((r) => setItems(r.communities));
+    getBackend().communities().then(setItems).catch(console.error);
   }, []);
 
   return (
