@@ -5,44 +5,49 @@ on:
     branches: [main]
 permissions:
   contents: read
-  pages: write
-  id-token: write
 concurrency:
   group: pages
   cancel-in-progress: true
 jobs:
   build:
     runs-on: ubuntu-latest
-    environment: github-pages
+    permissions:
+      contents: read
+      pages: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run build
-        env:
-          GITHUB_PAGES: 'true'
-          VITE_BACKEND_MODE: demo
-      # Pages может быть настроен на «деплой из ветки» (legacy) — переводим на деплой
-      # через GitHub Actions. Если уже workflow-режим, шаг ничего не меняет.
-      - name: Switch Pages source to GitHub Actions
+      # Source is a one-time repository setting, NOT a per-deployment mutation.
+      # Rewriting it on every push raced the dynamic Jekyll publisher.
+      - name: Require a single Pages source (GitHub Actions)
         uses: actions/github-script@v7
         with:
           script: |
-            try {
-              await github.rest.repos.updateInformationAboutPagesSite({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                build_type: 'workflow',
-              });
-              core.info('Pages build_type=workflow');
-            } catch (e) {
-              core.warning(`Не удалось переключить источник Pages: ${e.message}. Если деплой упадёт — включите Source: GitHub Actions в Settings → Pages.`);
+            const { data: pages } = await github.rest.repos.getPages({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+            if (pages.build_type !== 'workflow') {
+              core.setFailed('Settings → Pages → Build and deployment → Source must be GitHub Actions, not Deploy from a branch. Do not publish the repository root through Jekyll.');
             }
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build:pages
+      - run: npx playwright install --with-deps chromium webkit
+      - name: Render production artifact (desktop and iPhone WebKit)
+        run: npm run test:browser
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pages-build-browser-report
+          path: |
+            playwright-report
+            test-results
+          retention-days: 7
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
@@ -50,29 +55,38 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
-      - name: Проверка живого сайта
-        run: |
-          url="${{ steps.deployment.outputs.page_url }}"
-          asset=""
-          for i in $(seq 1 12); do
-            html="$(curl -fsSL "$url" || true)"
-            if echo "$html" | grep -q 'assets/index-.*\.js'; then
-              asset="$(echo "$html" | grep -o 'assets/index-[^"]*\.js' | head -1)"
-              if curl -fsSL -o /dev/null "$url$asset"; then
-                echo "✅ Сайт отдаёт собранный интерфейс: $url$asset"
-                exit 0
-              fi
-            fi
-            echo "Попытка $i/12: сайт ещё не отдаёт сборку (возможно, распространяется CDN), ждём 10 сек…"
-            sleep 10
-          done
-          echo "❌ Спустя 2 минуты сайт не отдаёт собранный бандл."
-          echo "Последний ответ:"; curl -fsSL "$url" 2>/dev/null | head -30 || echo "(нет ответа)"
-          echo "Если это повторяется — включите Settings → Pages → Source: GitHub Actions и запустите workflow заново."
-          exit 1
+  verify-live:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium webkit
+      - name: Render the deployed revision, not just HTTP 200
+        run: npm run test:browser
+        env:
+          PAGES_URL: ${{ needs.deploy.outputs.page_url }}
+          PAGES_EXPECTED_SHA: ${{ github.sha }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pages-live-browser-report
+          path: |
+            playwright-report
+            test-results
+          retention-days: 7
