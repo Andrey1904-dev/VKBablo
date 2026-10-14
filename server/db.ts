@@ -46,16 +46,18 @@ function migrate(database: DatabaseSync) {
   }
 }
 
+// node:sqlite принимает только скалярные значения; параметры приходят из JSON
+// и уже проверены на уровне API, поэтому здесь достаточно приведения.
 export function all<T>(sql: string, ...params: unknown[]): T[] {
-  return getDb().prepare(sql).all(...params) as T[];
+  return getDb().prepare(sql).all(...(params as never[])) as T[];
 }
 
 export function get<T>(sql: string, ...params: unknown[]): T | undefined {
-  return getDb().prepare(sql).get(...params) as T | undefined;
+  return getDb().prepare(sql).get(...(params as never[])) as T | undefined;
 }
 
 export function run(sql: string, ...params: unknown[]) {
-  return getDb().prepare(sql).run(...params);
+  return getDb().prepare(sql).run(...(params as never[]));
 }
 
 export function setting(key: string, fallback = ""): string {

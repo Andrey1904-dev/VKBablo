@@ -1,9 +1,19 @@
-import type { CommunityId, StyleRules, GenerationSettings } from "./types";
+import type {
+  AiPromptTemplate,
+  AiProviderId,
+  CommunityId,
+  CommunityRuleSet,
+  GenerationSettings,
+  StyleRules,
+} from "./types.ts";
 
 export const BRAND = {
   name: "VK AI Manager",
   short: "VKAI",
 };
+
+/** Версия VK API зафиксирована, чтобы поведение отложенной публикации не менялось внезапно. */
+export const VK_API_VERSION = "5.199";
 
 export const COMMUNITY_META: Record<
   CommunityId,
@@ -22,7 +32,7 @@ export const COMMUNITY_META: Record<
     shortName: "Истории",
     tagline: "Жизненные истории с неожиданным финалом",
     description:
-      "Юмористические истории, жизненные ситуации, смешные недоразумения и неожиданные концовки.",
+      "Юмористические истории, жизненные ситуации, смешные недоразумения и неожиданные концовки. Яркое начало, интрига, живая разговорная подача, неожиданный финал.",
     theme: "humor-stories",
     color: "#E86A33",
     colorToken: "stories",
@@ -32,7 +42,7 @@ export const COMMUNITY_META: Record<
     shortName: "Милана",
     tagline: "Комедия деревенского гламура",
     description:
-      "Комедийные приключения Миланы и деревенских персонажей, включая Толечку. Контраст гламура и деревенского быта.",
+      "Комедийные приключения Миланы и Толечки. Контраст гламура и деревенского быта, постоянные персонажи с утверждённой внешностью.",
     theme: "village-glamour",
     color: "#2FA36B",
     colorToken: "milana",
@@ -42,7 +52,7 @@ export const COMMUNITY_META: Record<
     shortName: "Суть жизни",
     tagline: "Ностальгия, наблюдения, «раньше и сейчас»",
     description:
-      "Жизненные наблюдения, ностальгия, сравнения прошлого и настоящего, эмоциональные публикации, в которых читатель узнаёт себя.",
+      "Жизненные наблюдения, ностальгия, сравнения прошлого и настоящего, эмоционально узнаваемые ситуации, темы, вызывающие обсуждение.",
     theme: "life-essence",
     color: "#3B7BD6",
     colorToken: "life",
@@ -52,7 +62,7 @@ export const COMMUNITY_META: Record<
     shortName: "Вероника",
     tagline: "Истории женщины 38 лет о знакомствах и отношениях",
     description:
-      "Истории и размышления женщины 38 лет о знакомствах, мужчинах, отношениях и жизненном опыте. Посты от лица Вероники.",
+      "Истории и размышления Вероники, 38 лет: знакомства, отношения, мужчины и женщины, общение с подписчиками. Город проживания не упоминается.",
     theme: "veronica-dating",
     color: "#D4537E",
     colorToken: "veronica",
@@ -163,3 +173,236 @@ export const STYLE_RULES: Record<CommunityId, StyleRules> = {
     forbiddenFacts: ["город проживания", "произвольная биография"],
   },
 };
+
+/** Долговременная память сообществ (§6 ТЗ). Версия 1 — утверждённые тематики. */
+export const COMMUNITY_RULE_SETS: Record<CommunityId, CommunityRuleSet> = {
+  stories: {
+    communityId: "stories",
+    version: 1,
+    theme: "Юмор и жизненные истории с неожиданной концовкой",
+    textStyle:
+      "Яркое начало, интрига, живая разговорная подача, неожиданный финал, читаемость с телефона, короткие абзацы.",
+    audience: "Широкая аудитория 25–55, привыкла читать с телефона, любит узнаваемый бытовой юмор.",
+    forbidden: [
+      "эротика и нагота",
+      "сексуальные действия",
+      "визуальный контент 18+",
+      "жестокость",
+      "политика",
+      "оскорбления",
+    ],
+    preferredTopics: [
+      "смешные жизненные ситуации",
+      "бытовой юмор",
+      "забавные диалоги",
+      "ирония",
+      "неожиданные концовки",
+    ],
+    unwantedTopics: ["политика", "религия", "медицина и диагнозы", "чужие трагедии"],
+    successfulExamples: [],
+    imageRules: "Комедийная двусмысленность допустима, эротическая визуализация — нет.",
+    characterRules: "Постоянных персонажей нет. Эмоции выразительные, без 18+.",
+    analyticsNotes: "Загружается владельцем отдельным документом. ИИ не выдумывает цифры.",
+    sources: [],
+  },
+  milana: {
+    communityId: "milana",
+    version: 1,
+    theme: "Деревенский гламур и комедия контрастов",
+    textStyle:
+      "Тёплая ирония, короткие сцены, реплики героев, контраст ожиданий и реальности, финал-панчлайн.",
+    audience: "Женщины 30–60, любят сериальные истории с постоянными героями.",
+    forbidden: ["эротика", "нагота", "изменение внешности героев", "грубость", "злая карикатура на деревню"],
+    preferredTopics: [
+      "гламур в сельских условиях",
+      "бытовые деревенские истории",
+      "Толечка и Милана",
+      "контраст ожиданий и реальности",
+    ],
+    unwantedTopics: ["политика", "алкоголь как основа сюжета", "насмешка над людьми"],
+    successfulExamples: [],
+    imageRules:
+      "Внешность Миланы и Толечки только по утверждённым референсам. Персонажи не меняют возраст, телосложение, лицо, причёску.",
+    characterRules:
+      "Милана — главная героиня. Толечка — отдельный постоянный персонаж. Эталонные изображения загружает владелец.",
+    analyticsNotes: "Загружается владельцем отдельным документом.",
+    sources: [],
+  },
+  life: {
+    communityId: "life",
+    version: 1,
+    theme: "Жизненные наблюдения и ностальгия «раньше и сейчас»",
+    textStyle:
+      "Тёплое узнавание, простые слова, точные детали, эмоционально значимые сравнения прошлого и настоящего.",
+    audience: "Аудитория 35–65, ценит узнавание и повод поделиться своим опытом.",
+    forbidden: [
+      "недостоверные утверждения как факты",
+      "выдуманная статистика",
+      "искусственное нагнетание",
+      "политика",
+      "эротика",
+    ],
+    preferredTopics: [
+      "как раньше оплачивали покупки",
+      "изменения в технологиях",
+      "изменения привычных сервисов",
+      "покупка автомобилей раньше и сейчас",
+      "стоимость жизни",
+      "разница поколений",
+      "привычки, которые изменились",
+    ],
+    unwantedTopics: ["политика", "медицинские советы", "чужие трагедии"],
+    successfulExamples: [],
+    imageRules: "Ностальгические образы, никаких выдуманных инфографик, поданных как факт.",
+    characterRules: "Постоянных персонажей нет.",
+    analyticsNotes: "Загружается владельцем отдельным документом.",
+    sources: [],
+  },
+  veronica: {
+    communityId: "veronica",
+    version: 1,
+    theme: "Знакомства и отношения глазами женщины 38 лет",
+    textStyle: "Живой, естественный, личный, располагающий к обсуждению. От первого лица.",
+    audience: "Женщины 30–55, проходят похожий опыт, ценят честность и юмор.",
+    forbidden: [
+      "город проживания",
+      "изменение биографии",
+      "эротика и 18+",
+      "унижение мужчин как класса",
+      "токсичные советы",
+    ],
+    preferredTopics: [
+      "знакомства",
+      "отношения",
+      "мужчины и женщины",
+      "личные истории",
+      "размышления",
+      "общение с подписчиками",
+    ],
+    unwantedTopics: ["политика", "движение «бывших» без юмора", "вымещение злости на аудитории"],
+    successfulExamples: [],
+    imageRules: "Внешность Вероники постоянная (38 лет). Город не изображается и не называется.",
+    characterRules:
+      "Вероника, 38 лет — единственная героиня и рассказчица. Биография не меняется без разрешения владельца.",
+    analyticsNotes: "Отдельная база правил и аналитики конкурентов будет загружена владельцем.",
+    sources: [],
+  },
+};
+
+export const DEFAULT_AI_PROVIDERS = [
+  {
+    id: "test",
+    name: "test" as AiProviderId,
+    kind: "both" as const,
+    baseUrl: "",
+    textModel: "test-writer-v1",
+    imageModel: "test-illustrator-v1",
+    supportsReferences: false,
+    supportsIdentityLock: false,
+    enabled: true,
+    pricePerImageUsd: 0,
+    pricePer1kTokensUsd: 0,
+    notes: "Встроенный детерминированный движок. Не является реальной языковой моделью.",
+  },
+  {
+    id: "openai",
+    name: "openai" as AiProviderId,
+    kind: "both" as const,
+    baseUrl: "https://api.openai.com/v1",
+    textModel: "gpt-4o-mini",
+    imageModel: "gpt-image-1",
+    supportsReferences: true,
+    supportsIdentityLock: false,
+    enabled: true,
+    pricePerImageUsd: 0.04,
+    pricePer1kTokensUsd: 0.0006,
+    notes:
+      "Требует AI_API_KEY в серверном окружении. Точное сохранение внешности персонажа не гарантируется — показывается как ограничение.",
+  },
+  {
+    id: "compatible",
+    name: "compatible" as AiProviderId,
+    kind: "both" as const,
+    baseUrl: "",
+    textModel: "",
+    imageModel: "",
+    supportsReferences: false,
+    supportsIdentityLock: false,
+    enabled: true,
+    pricePerImageUsd: 0,
+    pricePer1kTokensUsd: 0,
+    notes: "Любой OpenAI-совместимый endpoint. Задаётся AI_BASE_URL и модели.",
+  },
+];
+
+export const DEFAULT_AI_PROMPTS: Omit<AiPromptTemplate, "createdAt">[] = [
+  {
+    id: "prompt-idea-stories",
+    communityId: "stories",
+    kind: "idea",
+    version: 1,
+    name: "Идея: юмор и неожиданный финал",
+    template:
+      "Предложи идею поста: {{topic}}. Хук: {{hook}}. Финал должен быть неожиданным и смешным. Без 18+.",
+    active: true,
+  },
+  {
+    id: "prompt-text-milana",
+    communityId: "milana",
+    kind: "text",
+    version: 1,
+    name: "Текст: Милана и Толечка",
+    template:
+      "Напиши комедийную сцену с Миланой и Толечкой. Внешность и возраст строго по референсам: {{appearance}}. Контраст гламура и деревни. Финал — панчлайн.",
+    active: true,
+  },
+  {
+    id: "prompt-image-veronica",
+    communityId: "veronica",
+    kind: "image",
+    version: 1,
+    name: "Изображение: Вероника",
+    template:
+      "Иллюстрация к посту Вероники, 38 лет. Внешность по референсу: {{appearance}}. Город не указывать. Скромно и современно, без 18+.",
+    active: true,
+  },
+];
+
+/** Предохранители. Меняются только владельцем через настройки/секреты сервера. */
+export const APP_LIMITS = {
+  maxUploadBytes: 12 * 1024 * 1024,
+  allowedMimeTypes: ["image/png", "image/jpeg", "image/webp", "image/svg+xml", "image/gif"],
+  maxPostsPerRequest: 200,
+  /** Минимум публикаций, чтобы делать выводы в аналитике. */
+  postsForAnalyticsConclusions: 12,
+  /** Минимум секунд до времени публикации при планировании. */
+  minSecondsBeforePublish: 60,
+  rateLimit: {
+    postsPerMinute: 30,
+    approvalsPerMinute: 30,
+    generationsPerMinute: 10,
+    uploadsPerMinute: 20,
+    loginAttemptsPer10Min: 12,
+  },
+} as const;
+
+export const DEFAULT_APP_SETTINGS = {
+  mode: "test" as const,
+  automationPaused: false,
+  realPublishEnabled: false,
+  timezone: "Europe/Moscow",
+  prepareHoursAhead: 24,
+  aiMonthlyLimitUsd: 20,
+  aiProvider: "test" as AiProviderId,
+  aiTextModel: "test-writer-v1",
+  aiImageModel: "test-illustrator-v1",
+  aiBaseUrl: "",
+  notificationsEnabled: true,
+} as const;
+
+export const DEMO = {
+  label: "ДЕМО-РЕЖИМ",
+  note:
+    "Демонстрационные данные. Публикация в VK невозможна, платные API не вызываются, статистика помечена как демонстрационная.",
+  storageKey: "vkai-demo-store-v1",
+} as const;

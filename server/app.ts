@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { AuthUser } from "./auth.ts";
 import {
   createUser,
@@ -11,7 +12,7 @@ import {
 } from "./auth.ts";
 import { all, get, run, setSetting, setting } from "./db.ts";
 import { env, supabasePublic } from "./env.ts";
-import { HttpError, moscowParts, nid, nowIso } from "./lib.ts";
+import { HttpError, moscowParts, nid, nowIso, requireParam } from "./lib.ts";
 import { audit, listNotifications, markRead, unreadCount } from "./notify.ts";
 import {
   approvePost,
@@ -43,7 +44,7 @@ export function createApp() {
   app.onError((err, c) => {
     const status = err instanceof HttpError ? err.status : 500;
     if (status >= 500) console.error(err);
-    return c.json({ error: err.message || "Внутренняя ошибка" }, status);
+    return c.json({ error: err.message || "Внутренняя ошибка" }, status as ContentfulStatusCode);
   });
 
   app.use("/api/*", async (c, next) => {
@@ -61,7 +62,7 @@ export function createApp() {
       const status = e instanceof HttpError ? e.status : 500;
       const message = e instanceof Error ? e.message : "Внутренняя ошибка";
       if (status >= 500) console.error(e);
-      return c.json({ error: message }, status);
+      return c.json({ error: message }, status as ContentfulStatusCode);
     }
   });
 
@@ -76,7 +77,7 @@ export function createApp() {
   );
 
   app.get("/uploads/:file", (c) => {
-    const file = c.req.param("file");
+    const file = requireParam(c, "file");
     const found = readLocalUpload(file);
     if (!found) return c.notFound();
     return new Response(found.bytes, {
@@ -179,7 +180,7 @@ export function createApp() {
   });
 
   app.get("/api/communities/:id", requireUser, (c) => {
-    const id = c.req.param("id");
+    const id = requireParam(c, "id");
     const row = get<Record<string, unknown>>("SELECT * FROM communities WHERE id = ?", id);
     if (!row) throw new HttpError(404, "Сообщество не найдено");
     const characters = all<Record<string, unknown>>(
@@ -194,7 +195,7 @@ export function createApp() {
   });
 
   app.patch("/api/communities/:id", requireUser, async (c) => {
-    const id = c.req.param("id");
+    const id = requireParam(c, "id");
     const body = await c.req.json();
     const row = get("SELECT id FROM communities WHERE id = ?", id);
     if (!row) throw new HttpError(404, "Сообщество не найдено");
@@ -223,7 +224,7 @@ export function createApp() {
   });
 
   app.post("/api/communities/:id/vk", requireUser, async (c) => {
-    const id = c.req.param("id") as CommunityId;
+    const id = requireParam(c, "id") as CommunityId;
     const body = await c.req.json();
     const token = String(body.token || "").trim();
     if (!token) {
@@ -266,7 +267,7 @@ export function createApp() {
   });
 
   app.get("/api/posts/:id", requireUser, async (c) => {
-    const post = getPost(c.req.param("id"));
+    const post = getPost(requireParam(c, "id"));
     const versions = all(
       "SELECT * FROM post_versions WHERE post_id = ? ORDER BY version DESC LIMIT 30",
       post.id,
@@ -281,33 +282,33 @@ export function createApp() {
 
   app.patch("/api/posts/:id", requireUser, async (c) => {
     const body = await c.req.json();
-    const post = updatePost(c.req.param("id"), body, c.get("user").id);
+    const post = updatePost(requireParam(c, "id"), body, c.get("user").id);
     return c.json({ post });
   });
 
   app.post("/api/posts/:id/approve", requireUser, async (c) => {
     const body = await c.req.json().catch(() => ({}));
-    const post = approvePost(c.req.param("id"), c.get("user").id, String(body.comment || ""));
+    const post = approvePost(requireParam(c, "id"), c.get("user").id, String(body.comment || ""));
     return c.json({ post });
   });
 
   app.post("/api/posts/:id/reject", requireUser, async (c) => {
     const body = await c.req.json().catch(() => ({}));
-    const post = rejectPost(c.req.param("id"), c.get("user").id, String(body.comment || "Отклонено"));
+    const post = rejectPost(requireParam(c, "id"), c.get("user").id, String(body.comment || "Отклонено"));
     return c.json({ post });
   });
 
   app.post("/api/posts/:id/revise", requireUser, async (c) => {
     const body = await c.req.json();
     const what = body.what === "text" || body.what === "image" ? body.what : "all";
-    const post = requestRevision(c.req.param("id"), c.get("user").id, String(body.comment || ""), what);
+    const post = requestRevision(requireParam(c, "id"), c.get("user").id, String(body.comment || ""), what);
     return c.json({ post });
   });
 
   app.post("/api/posts/:id/regenerate", requireUser, async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const what = body.what === "text" || body.what === "image" ? body.what : "all";
-    const post = await regenerate(c.req.param("id"), what, c.get("user").id);
+    const post = await regenerate(requireParam(c, "id"), what, c.get("user").id);
     return c.json({ post });
   });
 
@@ -315,12 +316,12 @@ export function createApp() {
     if (setting("automation_paused", "0") === "1") {
       throw new HttpError(423, "Автоматизация на паузе. Снимите паузу, чтобы планировать публикации.");
     }
-    const post = await scheduleToVk(c.req.param("id"), c.get("user").id);
+    const post = await scheduleToVk(requireParam(c, "id"), c.get("user").id);
     return c.json({ post, dryRun: setting("app_mode", "test") !== "approval" });
   });
 
   app.post("/api/posts/:id/generate", requireUser, async (c) => {
-    const existing = getPost(c.req.param("id"));
+    const existing = getPost(requireParam(c, "id"));
     const post = await generateForSlot({
       communityId: existing.communityId,
       scheduledAt: existing.scheduledAt,
@@ -414,7 +415,7 @@ export function createApp() {
   });
 
   app.patch("/api/characters/:id", requireUser, async (c) => {
-    const id = c.req.param("id");
+    const id = requireParam(c, "id");
     const ch = get<{ locked: number; appearance: string }>("SELECT locked, appearance FROM characters WHERE id = ?", id);
     if (!ch) throw new HttpError(404, "Персонаж не найден");
     const body = await c.req.json();
@@ -432,7 +433,7 @@ export function createApp() {
   });
 
   app.post("/api/characters/:id/references", requireUser, async (c) => {
-    const id = c.req.param("id");
+    const id = requireParam(c, "id");
     const ch = get("SELECT id FROM characters WHERE id = ?", id);
     if (!ch) throw new HttpError(404, "Персонаж не найден");
     const body = await c.req.parseBody();

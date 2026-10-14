@@ -1,3 +1,7 @@
+/**
+ * Общая модель данных VK AI Manager.
+ * Используется frontend, Edge Functions и локальным стендом.
+ */
 export const POST_STATUSES = [
   "draft",
   "generating",
@@ -27,12 +31,16 @@ export const STATUS_LABELS: Record<PostStatus, string> = {
 export const COMMUNITY_IDS = ["stories", "milana", "life", "veronica"] as const;
 export type CommunityId = (typeof COMMUNITY_IDS)[number];
 
-export const DEFAULT_SLOTS = ["13:30", "17:30", "21:30"] as const;
-export const MOSCOW_TZ = "Europe/Moscow";
+export { MOSCOW_TZ, DEFAULT_SLOTS } from "./moscow.ts";
 
 export type AppMode = "test" | "approval";
 
-export type AiProviderId = "test" | "openai" | "compatible";
+export type AiProviderId = "test" | "openai" | "compatible" | "custom";
+
+export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled";
+export const JOB_STATUSES: readonly JobStatus[] = ["queued", "running", "done", "failed", "cancelled"];
+
+export type GenerationJobKind = "idea" | "text" | "image" | "full_post" | "regenerate" | "preview";
 
 export interface Community {
   id: CommunityId;
@@ -45,12 +53,15 @@ export interface Community {
   avatarUrl: string;
   vkGroupId: string | null;
   vkScreenName: string | null;
+  /** true только если проверенный токен реально сохранён (в тестовом режиме всегда false). */
   vkConnected: boolean;
   schedule: string[];
   styleRules: StyleRules;
   generationSettings: GenerationSettings;
   status: "active" | "paused";
-  createdAt: string;
+  automationEnabled: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface StyleRules {
@@ -79,6 +90,46 @@ export interface GenerationSettings {
   prepareHoursAhead: number;
 }
 
+/** Долговременная память сообщества (ТЗ §6). Версионируется в community_rule_versions. */
+export interface CommunityRuleSet {
+  communityId: CommunityId;
+  version: number;
+  theme: string;
+  textStyle: string;
+  audience: string;
+  forbidden: string[];
+  preferredTopics: string[];
+  unwantedTopics: string[];
+  successfulExamples: string[];
+  imageRules: string;
+  characterRules: string;
+  analyticsNotes: string;
+  sources: string[];
+  updatedAt?: string;
+  updatedBy?: string | null;
+}
+
+export interface CommunityRuleVersion {
+  id: string;
+  communityId: CommunityId;
+  version: number;
+  rules: CommunityRuleSet;
+  changeNote: string;
+  createdAt: string;
+  createdBy: string | null;
+}
+
+export interface Schedule {
+  id: string;
+  communityId: CommunityId;
+  slots: string[];
+  timezone: string;
+  daysOfWeek: number[];
+  paused: boolean;
+  skipUntil: string | null;
+  note: string;
+}
+
 export interface Character {
   id: string;
   communityId: CommunityId;
@@ -88,6 +139,9 @@ export interface Character {
   appearance: AppearanceLock;
   personality: string;
   locked: boolean;
+  /** placeholder — черновое описание, approved — владелец утвердил и загрузил референсы. */
+  appearanceStatus: "placeholder" | "approved";
+  primaryReferenceId: string | null;
   references: CharacterReference[];
   createdAt: string;
   updatedAt: string;
@@ -107,8 +161,12 @@ export interface AppearanceLock {
 export interface CharacterReference {
   id: string;
   characterId: string;
+  /** Путь в Storage (bucket media, префикс characters/) или локальный путь /uploads/... */
   filePath: string;
+  /** Готовая ссылка для просмотра (signed URL или локальный путь). */
+  url?: string | null;
   approved: boolean;
+  isPrimary: boolean;
   notes: string;
   createdAt: string;
 }
@@ -122,6 +180,7 @@ export interface Post {
   title: string;
   text: string;
   imagePath: string | null;
+  imageUrl?: string | null;
   imagePrompt: string;
   topic: string;
   idea: string;
@@ -129,11 +188,12 @@ export interface Post {
   contentHash: string;
   approvedHash: string | null;
   approvedAt: string | null;
-  approvedBy: number | null;
+  approvedBy: string | null;
   errorMessage: string | null;
   generationMeta: GenerationMeta | null;
   similarityScore: number | null;
   similarTo: string | null;
+  /** true — публикация никогда не уйдёт в VK (демо/dry-run/mock). */
   testMode: boolean;
   version: number;
   createdAt: string;
@@ -148,6 +208,9 @@ export interface GenerationMeta {
   costUsd: number;
   ideaSource: string;
   warnings: string[];
+  /** Честные ограничения выбранного провайдера (например, отсутствие identity-lock). */
+  providerLimitations?: string[];
+  demo?: boolean;
 }
 
 export interface PostVersion {
@@ -159,7 +222,7 @@ export interface PostVersion {
   imagePrompt: string;
   contentHash: string;
   createdAt: string;
-  createdBy: number | null;
+  createdBy: string | null;
   reason: string;
 }
 
@@ -169,8 +232,124 @@ export interface Approval {
   versionHash: string;
   action: "approve" | "reject" | "revise";
   comment: string;
-  userId: number;
+  userId: string;
   createdAt: string;
+}
+
+export interface MediaAsset {
+  id: string;
+  communityId: CommunityId | null;
+  postId: string | null;
+  characterId: string | null;
+  bucket: string;
+  path: string;
+  mimeType: string;
+  sizeBytes: number;
+  kind: "post_image" | "character_reference" | "community_logo" | "generated" | "archive";
+  createdAt: string;
+  createdBy: string | null;
+}
+
+export interface AiProviderConfig {
+  id: string;
+  name: AiProviderId | string;
+  kind: "text" | "image" | "both";
+  baseUrl: string;
+  textModel: string;
+  imageModel: string;
+  supportsReferences: boolean;
+  supportsIdentityLock: boolean;
+  enabled: boolean;
+  pricePerImageUsd: number;
+  pricePer1kTokensUsd: number;
+  notes: string;
+  /** Ключ никогда не возвращается наружу — только факт наличия. */
+  hasKey: boolean;
+}
+
+export interface AiPromptTemplate {
+  id: string;
+  communityId: CommunityId | null;
+  kind: "idea" | "text" | "image" | "revise" | "quality";
+  version: number;
+  name: string;
+  template: string;
+  active: boolean;
+  createdAt: string;
+}
+
+export interface PostStatistics {
+  id: string;
+  postId: string;
+  communityId: CommunityId;
+  views: number;
+  likes: number;
+  comments: number;
+  shares: number;
+  collectedAt: string;
+  source: "vk" | "manual" | "demo";
+}
+
+export interface AnalyticsSnapshot {
+  id: string;
+  communityId: CommunityId | null;
+  periodStart: string;
+  periodEnd: string;
+  totals: { views: number; likes: number; comments: number; shares: number; published: number };
+  note: string;
+  createdAt: string;
+}
+
+export interface AnalyticsPoint {
+  date: string;
+  communityId?: CommunityId;
+  views: number;
+  likes: number;
+  comments: number;
+  shares: number;
+  source?: string;
+}
+
+export interface AnalyticsPayload {
+  points: AnalyticsPoint[];
+  published: Post[];
+  /** Топ по вовлечённости среди опубликованных. */
+  best: Array<{ postId: string; title: string; communityId: CommunityId; score: number; views: number }>;
+  note: string;
+  testMode: boolean;
+  /** Честно: данных мало для выводов. */
+  insufficientData: boolean;
+  thresholds: { postsForConclusions: number };
+}
+
+export interface IntegrationStatus {
+  id: string;
+  key: "supabase" | "github_pages" | "vk" | "ai_text" | "ai_image" | "cron" | "storage" | "realtime";
+  label: string;
+  configured: boolean;
+  /** Проверено реальным вызовом в этой сессии, а не только наличием ключа. */
+  verified: boolean;
+  status: "off" | "configured" | "verified" | "error" | "demo";
+  detail: string;
+  checkedAt: string | null;
+}
+
+export interface ApplicationSettings {
+  mode: AppMode;
+  automationPaused: boolean;
+  /** Глобальный предохранитель: реальные публикации VK разрешены. По умолчанию false. */
+  realPublishEnabled: boolean;
+  timezone: string;
+  prepareHoursAhead: number;
+  aiMonthlyLimitUsd: number;
+  spendUsdMonth: number;
+  aiProvider: AiProviderId;
+  aiTextModel: string;
+  aiImageModel: string;
+  aiBaseUrl: string;
+  notificationsEnabled: boolean;
+  demoMode: boolean;
+  updatedAt?: string;
 }
 
 export interface NotificationItem {
@@ -191,7 +370,7 @@ export interface NotificationItem {
   createdAt: string;
 }
 
-export interface DashboardStats {
+export interface DashboardData {
   ready: number;
   pendingReview: number;
   scheduled: number;
@@ -200,10 +379,12 @@ export interface DashboardStats {
   missedSlots: number;
   automationPaused: boolean;
   mode: AppMode;
+  realPublishEnabled: boolean;
   nextPosts: Post[];
   byCommunity: Array<{
     id: CommunityId;
     name: string;
+    color: string;
     pending: number;
     scheduled: number;
     published: number;
@@ -211,42 +392,12 @@ export interface DashboardStats {
   }>;
   spendUsdMonth: number;
   spendLimitUsd: number;
+  unread: number;
+  jobs: Job[];
+  integrations: IntegrationStatus[];
+  backend: BackendInfo;
+  moscow: { dateStr: string; timeStr: string; weekday: number };
 }
-
-export interface AnalyticsPoint {
-  date: string;
-  views: number;
-  likes: number;
-  comments: number;
-  shares: number;
-}
-
-export interface UserPublic {
-  id: number;
-  email: string;
-  name: string;
-  role: string;
-}
-
-export interface SettingsPublic {
-  mode: AppMode;
-  automationPaused: boolean;
-  timezone: typeof MOSCOW_TZ;
-  prepareHoursAhead: number;
-  aiMonthlyLimitUsd: number;
-  spendUsdMonth: number;
-  vkConfigured: boolean;
-  aiConfigured: boolean;
-  aiProvider: AiProviderId;
-  aiTextModel: string;
-  aiImageModel: string;
-  aiBaseUrl: string;
-  notificationsEnabled: boolean;
-  telegramConfigured: boolean;
-  backupLastAt: string | null;
-}
-
-export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled";
 
 export interface Job {
   id: string;
@@ -258,4 +409,107 @@ export interface Job {
   error: string | null;
   idempotencyKey: string | null;
   createdAt: string;
+}
+
+export interface AuditEntry {
+  id: string;
+  userId: string | null;
+  action: string;
+  entityType: string | null;
+  entityId: string | null;
+  details: unknown;
+  ip: string | null;
+  result?: string | null;
+  createdAt: string;
+}
+
+export interface CalendarPayload {
+  posts: Post[];
+  expected: Array<{ communityId: CommunityId; scheduledAt: string }>;
+  missed: Array<{ communityId: CommunityId; scheduledAt: string }>;
+  timezone: string;
+}
+
+export interface PostDetailPayload {
+  post: Post;
+  versions: PostVersion[];
+  approvals: Approval[];
+  community: Community | null;
+  imageUrl: string | null;
+}
+
+export interface AiGenerationRecord {
+  id: string;
+  communityId: CommunityId | null;
+  type: string;
+  provider: string;
+  model: string;
+  prompt: string;
+  result: string;
+  costUsd: number;
+  status: string;
+  error: string | null;
+  createdAt: string;
+}
+
+export interface AiProvidersPayload {
+  active: AiProviderId;
+  label: string;
+  supportsReferences: boolean;
+  supportsIdentityLock: boolean;
+  configuredKey: boolean;
+  demo: boolean;
+  models: { text: string; image: string };
+  limitations: string[];
+}
+
+export interface UserPublic {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+}
+
+export interface AuthStatus {
+  setupComplete: boolean;
+  user: UserPublic | null;
+  backend: BackendInfo;
+  /** Куда владельцу нужно смотреть при подключении (без секретов). */
+  hints: string[];
+}
+
+export type BackendKind = "supabase" | "local" | "demo";
+
+export interface BackendInfo {
+  kind: BackendKind;
+  label: string;
+  /** true — данные демонстрационные, публикация в VK невозможна в принципе. */
+  demo: boolean;
+  realPublishPossible: boolean;
+  supabaseUrl: string | null;
+  hasAnonKey: boolean;
+  functionsUrl: string | null;
+  note: string;
+}
+
+export interface PostFilters {
+  communityId?: CommunityId | "";
+  status?: PostStatus | "";
+  q?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+}
+
+export interface UploadResult {
+  path: string;
+  url: string | null;
+  mime: string;
+  sizeBytes: number;
+  bucket: string;
+}
+
+export interface ApiErrorShape {
+  error: string;
+  code?: string;
 }

@@ -13,6 +13,13 @@
 
 Без явного одобрения конкретной версии поста отправка в VK **технически невозможна** (проверка на сервере, не только в UI).
 
+Документы проекта:
+
+- [`HANDOFF.md`](HANDOFF.md) — полное состояние проекта: что сделано, что нет, контракты, грабли, план работ
+- [`AUDIT.md`](AUDIT.md) — аудит исходного кода и план миграции на Supabase
+- [`supabase/README.md`](supabase/README.md) — схема, RLS, RPC, Storage, Cron, проверки после подключения
+- `CODEX_SETUP.md` — пошаговая инструкция подключения для владельца (ещё не написана, этап 9)
+
 ## Что уже работает локально
 
 - Закрытый вход / первый запуск (создание владельца)
@@ -30,7 +37,7 @@
 | Боевой текст/картинка GPT, DALL·E и т.п. | AI API key в настройках | Тестовый движок |
 | Реальная отложенная запись VK | токен сообщества + Group ID, режим «С согласованием» | Имитация, статус `test_…` |
 | Облачная БД, Storage, Auth, Realtime | проект Supabase | Локальная SQLite + файлы |
-| Деплой на Cloudflare | аккаунт CF + секреты wrangler | Исходники готовы (`wrangler.toml`) |
+| Публикация сайта | GitHub Pages (Actions) | Готово после настройки workflow |
 | Telegram / Web Push | не подключены | Заложено в архитектуре |
 
 Не утверждается, что VK-публикация или облако работают, пока вы не задали секреты.
@@ -68,7 +75,7 @@ npm test
 
 Пошагово: [`supabase/README.md`](supabase/README.md)
 
-Секреты только в `.env` / Cloudflare Secrets:
+Секреты только в `.env` (локальный стенд) или в секретах Edge Functions (Supabase) — никогда в коде, Git и чате:
 
 - `SUPABASE_URL`
 - `SUPABASE_ANON_KEY` (и `VITE_SUPABASE_ANON_KEY` для Realtime на клиенте)
@@ -76,20 +83,17 @@ npm test
 
 Пока service role не задан, сервер честно работает на локальной SQLite и показывает баннер в панели.
 
-## Cloudflare
+## Деплой: GitHub Pages + Supabase
 
-```bash
-npm run build
-npx wrangler login
-npx wrangler secret put SESSION_SECRET
-npx wrangler secret put ENCRYPTION_KEY
-npx wrangler secret put SUPABASE_URL
-npx wrangler secret put SUPABASE_ANON_KEY
-npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
-npx wrangler deploy
-```
+Cloudflare в проекте не используется (ни Workers, ни D1/R2, ни Wrangler).
 
-Cron каждые 5 минут готовит слоты и двигает очередь. Долгие AI-вызовы не должны жить в одном коротком HTTP-запросе: используется очередь `jobs`.
+1. **Фронтенд** — GitHub Actions собирает Vite и публикует `dist` на GitHub Pages
+   (hash-роутинг, `VITE_BASE`, публичные `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`).
+2. **Серверная часть** — Supabase: миграции, RLS, Storage, Auth, Edge Functions и Cron.
+3. **Долгие задачи** (генерация, публикация, статистика) выполняются очередями и воркером,
+   а не внутри одного HTTP-запроса: у Edge Functions есть лимит времени выполнения.
+
+Пошагово: [`CODEX_SETUP.md`](CODEX_SETUP.md) · детали схемы: [`supabase/README.md`](supabase/README.md)
 
 ## Безопасность
 
@@ -103,8 +107,8 @@ Cron каждые 5 минут готовит слоты и двигает оч�
 
 ```
 src/                 React UI
-server/              Hono API (Node + Worker)
+server/              Hono API (локальный стенд разработки, не production)
 shared/              типы и правила сообществ
 migrations/          SQLite (локальная разработка)
-supabase/            PostgreSQL + RLS + Storage
+supabase/            PostgreSQL + RLS + Storage + Edge Functions + Cron
 ```
