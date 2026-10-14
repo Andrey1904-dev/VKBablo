@@ -1,4 +1,5 @@
 name: ci
+
 on:
   push:
     branches: ["**"]
@@ -9,9 +10,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
+
       - run: npm ci
-      - run: npm test
-      - run: npm run build
+
+      # Изоморфное ядро (shared/*) обязано быть синхронно с копией для Edge Functions.
+      - run: node scripts/sync-shared.mjs --check
+
+      - name: Типы (frontend + локальный стенд)
+        run: npm run typecheck
+
+      - name: Тесты (одобрение, хэш версий, планировщик)
+        run: npm test
+
+      - name: Сборка фронтенда
+        run: npm run build

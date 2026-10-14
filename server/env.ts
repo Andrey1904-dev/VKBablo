@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-let extra: Record<string, string> = {};
 
 export function loadDotEnv() {
   const p = join(ROOT, ".env");
@@ -23,15 +22,8 @@ export function loadDotEnv() {
   }
 }
 
-export function bindWorkerEnv(env: Record<string, unknown>) {
-  extra = {};
-  for (const [k, v] of Object.entries(env)) {
-    if (typeof v === "string") extra[k] = v;
-  }
-}
-
 export function env(key: string, fallback = ""): string {
-  return extra[key] || process.env[key] || fallback;
+  return process.env[key] || fallback;
 }
 
 export function supabaseConfigured(): boolean {

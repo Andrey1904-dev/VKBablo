@@ -1,5 +1,16 @@
 import { createHash, randomBytes, scryptSync, createCipheriv, createDecipheriv } from "node:crypto";
 import { MOSCOW_TZ } from "../shared/types.ts";
+import { contentHash as canonicalContentHash } from "../shared/hash.ts";
+
+/** Параметр маршрута обязателен: без него обработчик не имеет смысла. */
+export function requireParam(
+  context: { req: { param: (name: string) => string | undefined } },
+  name: string,
+): string {
+  const value = context.req.param(name);
+  if (!value) throw new HttpError(400, `Не указан параметр маршрута: ${name}`);
+  return value;
+}
 
 export function nid(prefix = ""): string {
   const id = randomBytes(12).toString("hex");
@@ -14,20 +25,19 @@ export function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
+/**
+ * Хэш версии публикации — единственный источник истины в `shared/hash.ts`
+ * (тот же алгоритм, что в PostgreSQL `app.content_hash` и в Edge Functions).
+ * Локальный стенд обязан считать так же, иначе одобрение в тестовом режиме
+ * не соответствовало бы продакшену.
+ */
 export function contentHash(input: {
   communityId: string;
   text: string;
   imagePath: string | null;
   scheduledAt: string;
 }): string {
-  return sha256(
-    JSON.stringify({
-      c: input.communityId,
-      t: input.text.trim(),
-      i: input.imagePath ?? "",
-      s: input.scheduledAt,
-    }),
-  );
+  return canonicalContentHash(input);
 }
 
 export function getEncryptionKey(): Buffer {
