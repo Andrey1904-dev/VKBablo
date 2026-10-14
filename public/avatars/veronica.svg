@@ -1,4 +1,4 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
-  <rect width="128" height="128" rx="28" fill="#D4537E"/>
-  <text x="64" y="78" text-anchor="middle" font-size="48" fill="white" font-family="Georgia, serif">В</text>
+  <rect width="128" height="128" rx="28" fill="#EC4899"/>
+  <text x="64" y="90.2" text-anchor="middle" font-size="52" font-weight="700" fill="#ffffff" font-family="Inter, Arial, sans-serif" letter-spacing="1">В</text>
 </svg>

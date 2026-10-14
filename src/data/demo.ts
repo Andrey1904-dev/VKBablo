@@ -478,6 +478,8 @@ export class DemoBackend implements Backend {
       return this.state.user;
     },
     signOut: async () => {
+      // Демо-сессия живёт в браузере: выход очищает владельца, данные постов остаются.
+      this.state.user = null;
       this.persist();
     },
     onChange: () => () => undefined,

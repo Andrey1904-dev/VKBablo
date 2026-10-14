@@ -36,7 +36,7 @@ export const COMMUNITY_META: Record<
     description:
       "Юмористические истории, жизненные ситуации, смешные недоразумения и неожиданные концовки. Яркое начало, интрига, живая разговорная подача, неожиданный финал.",
     theme: "humor-stories",
-    color: "#E86A33",
+    color: "#F59E0B",
     colorToken: "stories",
   },
   milana: {
@@ -46,7 +46,7 @@ export const COMMUNITY_META: Record<
     description:
       "Комедийные приключения Миланы и Толечки. Контраст гламура и деревенского быта, постоянные персонажи с утверждённой внешностью.",
     theme: "village-glamour",
-    color: "#2FA36B",
+    color: "#8B5CF6",
     colorToken: "milana",
   },
   life: {
@@ -56,7 +56,7 @@ export const COMMUNITY_META: Record<
     description:
       "Жизненные наблюдения, ностальгия, сравнения прошлого и настоящего, эмоционально узнаваемые ситуации, темы, вызывающие обсуждение.",
     theme: "life-essence",
-    color: "#3B7BD6",
+    color: "#22C55E",
     colorToken: "life",
   },
   veronica: {
@@ -66,7 +66,7 @@ export const COMMUNITY_META: Record<
     description:
       "Истории и размышления Вероники, 38 лет: знакомства, отношения, мужчины и женщины, общение с подписчиками. Город проживания не упоминается.",
     theme: "veronica-dating",
-    color: "#D4537E",
+    color: "#EC4899",
     colorToken: "veronica",
   },
 };

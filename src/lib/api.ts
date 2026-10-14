@@ -1,3 +1,9 @@
+/**
+ * HTTP-хелпер для LocalBackend (локальный стенд разработки, server/).
+ * Страницы интерфейса работают через getBackend() из @/data — не через этот модуль.
+ *
+ * Плюс общие подписи статусов и палитра сообществ из дизайн-системы DesignVK.
+ */
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -29,21 +35,15 @@ export const STATUS_LABEL: Record<string, string> = {
   rejected: "Отклонён",
 };
 
-export const STATUS_TONE: Record<string, string> = {
-  draft: "bg-muted text-muted-fg",
-  generating: "bg-accent/15 text-accent",
-  review: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
-  needs_revision: "bg-orange-500/15 text-orange-700 dark:text-orange-300",
-  approved: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
-  scheduled: "bg-sky-500/15 text-sky-700 dark:text-sky-300",
-  published: "bg-emerald-600/20 text-emerald-800 dark:text-emerald-200",
-  error: "bg-rose-500/15 text-rose-700 dark:text-rose-300",
-  rejected: "bg-zinc-500/15 text-zinc-600 dark:text-zinc-300",
-};
-
-export const COMMUNITY_COLOR: Record<string, string> = {
-  stories: "#E86A33",
-  milana: "#2FA36B",
-  life: "#3B7BD6",
-  veronica: "#D4537E",
+/** Тон бейджа дизайн-системы для каждого статуса поста. */
+export const STATUS_TONE: Record<string, "neutral" | "success" | "warning" | "purple" | "danger" | "sky"> = {
+  draft: "neutral",
+  generating: "purple",
+  review: "warning",
+  needs_revision: "warning",
+  approved: "purple",
+  scheduled: "sky",
+  published: "success",
+  error: "danger",
+  rejected: "neutral",
 };

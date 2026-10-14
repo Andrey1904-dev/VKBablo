@@ -1,7 +1,10 @@
 import { useState } from "react";
 import { getBackend } from "@/data";
 import type { UserPublic } from "@shared/types";
+import { COMMUNITY_IDS } from "@shared/types";
+import { COMMUNITY_META } from "@shared/constants";
 import { Button, Field, Input } from "@/components/ui";
+import { Command, Clock3 } from "lucide-react";
 
 export default function LoginPage({
   setup,
@@ -34,37 +37,70 @@ export default function LoginPage({
   }
 
   return (
-    <div className="relative min-h-dvh overflow-hidden bg-[#12141A] text-white">
-      <div className="pointer-events-none absolute -left-24 -top-24 h-80 w-80 rounded-full bg-[#8B7CFF]/30 blur-3xl" />
-      <div className="pointer-events-none absolute -bottom-24 -right-24 h-80 w-80 rounded-full bg-[#E86A33]/20 blur-3xl" />
-      <div className="mx-auto grid min-h-dvh max-w-6xl items-center gap-10 px-5 py-10 lg:grid-cols-2">
-        <div className="space-y-6">
-          <div className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1 text-xs text-white/70">
+    <div className="login-screen">
+      <div className="login-glow-a" />
+      <div className="login-glow-b" />
+      <div className="login-grid login-wide">
+        <div className="login-hero">
+          <div className="login-pill">
+            <i />
             Europe/Moscow · 13:30 / 17:30 / 21:30
           </div>
-          <h1 className="text-4xl font-extrabold leading-tight sm:text-5xl">
-            VK AI Manager
-          </h1>
-          <p className="max-w-md text-white/70">
-            Автономная платформа для четырёх сообществ ВКонтакте. Генерация, ручное согласование,
-            отложенная публикация. Без одобрения — ни одного поста.
+          <h1>VKBablo</h1>
+          <p>
+            Автономная платформа для четырёх сообществ ВКонтакте. Генерация, обязательное ручное
+            согласование и отложенная публикация. Без одобрения владельца не уходит ни один пост.
           </p>
-          <div className="grid grid-cols-2 gap-3 text-sm text-white/80">
-            {["Ну и история", "Милана", "ВСЯ СУТЬ ЖИЗНИ", "Вероника"].map((n) => (
-              <div key={n} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-                {n}
-              </div>
-            ))}
+          <div className="login-communities">
+            {COMMUNITY_IDS.map((id) => {
+              const meta = COMMUNITY_META[id];
+              return (
+                <div className="login-community" key={id}>
+                  <span
+                    style={{
+                      width: 26,
+                      height: 26,
+                      borderRadius: 8,
+                      background: meta.color,
+                      display: "grid",
+                      placeItems: "center",
+                      fontSize: 9,
+                      fontWeight: 700,
+                      color: "#fff",
+                      flex: "none",
+                    }}
+                  >
+                    {meta.shortName.slice(0, 2).toUpperCase()}
+                  </span>
+                  <span
+                    style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                    title={meta.name}
+                  >
+                    {meta.name}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 7, color: "#676773", fontSize: 10, letterSpacing: ".07em", textTransform: "uppercase" }}>
+            <Clock3 size={12} /> 4 сообщества · 12 публикаций в день
           </div>
         </div>
-        <form onSubmit={submit} className="rounded-3xl border border-white/10 bg-white text-[#12141A] p-6 shadow-lift sm:p-8">
-          <h2 className="text-xl font-extrabold">{setup ? "Создание владельца" : "Вход"}</h2>
-          <p className="mt-1 text-sm text-zinc-500">
-            {setup
-              ? "Первый запуск. Пароль не короче 10 символов. Ключи API в чат не отправляйте."
-              : "Закрытая панель. Сессия хранится в httpOnly cookie."}
-          </p>
-          <div className="mt-6 space-y-4">
+        <form onSubmit={submit} className="login-card">
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+            <span className="brand-mark">
+              <Command size={18} />
+            </span>
+            <div>
+              <h2>{setup ? "Создание владельца" : "Вход в панель"}</h2>
+              <p style={{ margin: "3px 0 0" }}>
+                {setup
+                  ? "Первый запуск. Пароль не короче 10 символов. Ключи API в чат не отправляйте."
+                  : "Закрытая панель. Сессия хранится в httpOnly cookie."}
+              </p>
+            </div>
+          </div>
+          <div>
             {setup && (
               <Field label="Имя">
                 <Input value={name} onChange={(e) => setName(e.target.value)} required />
@@ -74,12 +110,20 @@ export default function LoginPage({
               <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="username" />
             </Field>
             <Field label="Пароль">
-              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete={setup ? "new-password" : "current-password"} />
+              <Input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                autoComplete={setup ? "new-password" : "current-password"}
+              />
             </Field>
-            {error && <div className="rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>}
-            <Button type="submit" className="w-full" disabled={pending}>
-              {pending ? "Подождите…" : setup ? "Создать аккаунт" : "Войти"}
-            </Button>
+            {error && <div className="login-error">{error}</div>}
+            <div style={{ marginTop: 16 }}>
+              <Button type="submit" className="full" disabled={pending} style={{ height: 42 }}>
+                {pending ? "Подождите…" : setup ? "Создать аккаунт" : "Войти"}
+              </Button>
+            </div>
           </div>
         </form>
       </div>

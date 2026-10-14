@@ -1,11 +1,24 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { getBackend } from "@/data";
-import { Button, Card } from "@/components/ui";
+import { Button, Empty, PageHead } from "@/components/ui";
 import { formatMoscow } from "@/lib/time";
+import type { NotificationItem } from "@shared/types";
+import { Bell, BellRing, Check, ChevronRight, CircleAlert, Send, Sparkles } from "lucide-react";
+
+const ICONS: Record<string, typeof Bell> = {
+  review: BellRing,
+  generation_error: CircleAlert,
+  publish_error: CircleAlert,
+  scheduled: Send,
+  published: Check,
+  missed_slot: CircleAlert,
+  vk_connection: Bell,
+  system: Sparkles,
+};
 
 export default function NotificationsPage() {
-  const [items, setItems] = useState<any[]>([]);
+  const [items, setItems] = useState<NotificationItem[]>([]);
 
   async function load() {
     const r = await getBackend().notifications();
@@ -15,25 +28,49 @@ export default function NotificationsPage() {
     load();
   }, []);
 
+  const unread = items.filter((n) => !n.read).length;
+
   return (
-    <div className="space-y-5 animate-fade-in max-w-3xl">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-extrabold">Уведомления</h1>
-        <Button variant="outline" size="sm" onClick={() => getBackend().markNotificationsRead().then(load)}>
-          Прочитать все
-        </Button>
-      </div>
-      <div className="space-y-2">
-        {items.map((n) => (
-          <Card key={n.id} className={`p-4 ${n.read ? "opacity-70" : ""}`}>
-            <div className="text-xs text-muted-fg">{n.type} · {formatMoscow(n.createdAt)}</div>
-            <div className="font-bold">{n.title}</div>
-            <p className="text-sm text-muted-fg">{n.message}</p>
-            {n.link && <Link className="text-sm text-accent" to={n.link}>Открыть</Link>}
-          </Card>
-        ))}
-        {items.length === 0 && <p className="text-sm text-muted-fg">Пока тихо.</p>}
-      </div>
+    <div className="page enter">
+      <PageHead
+        title="Уведомления"
+        description="Важные обновления рабочего пространства."
+        actions={
+          <Button variant="secondary" onClick={() => getBackend().markNotificationsRead().then(load)} disabled={unread === 0}>
+            <Check size={15} /> Прочитать все
+          </Button>
+        }
+      />
+      {items.length === 0 ? (
+        <div className="surface">
+          <Empty icon={Bell} title="Пока всё спокойно" text="Новых уведомлений нет." />
+        </div>
+      ) : (
+        <div className="notif-list">
+          {items.map((n) => {
+            const Icon = ICONS[n.type] ?? Bell;
+            return (
+              <div key={n.id} className={`notif surface ${n.read ? "read" : ""}`}>
+                <span className={`attention-icon ${n.type.includes("error") || n.type === "missed_slot" ? "warning" : ""}`}>
+                  <Icon size={17} />
+                </span>
+                <div className="notif-body">
+                  <span className="mono">
+                    {n.type} · {formatMoscow(n.createdAt)}
+                  </span>
+                  <b>{n.title}</b>
+                  <p>{n.message}</p>
+                  {n.link && (
+                    <Link className="text-btn" to={n.link}>
+                      Открыть <ChevronRight size={13} />
+                    </Link>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

@@ -1,142 +1,301 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import { api } from "@/lib/api";
-import { Button, Card } from "@/components/ui";
-import { COMMUNITY_IDS } from "@shared/types";
-
-function nextSlotIso(time = "13:30") {
-  const now = new Date();
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Europe/Moscow",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(now);
-  const g = (t: string) => parts.find((p) => p.type === t)?.value;
-  const date = `${g("year")}-${g("month")}-${g("day")}`;
-  const tomorrow = new Date(`${date}T00:00:00+03:00`);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const y = tomorrow.getFullYear();
-  const m = String(tomorrow.getMonth() + 1).padStart(2, "0");
-  const d = String(tomorrow.getDate()).padStart(2, "0");
-  return new Date(`${y}-${m}-${d}T${time}:00+03:00`).toISOString();
-}
+import { useNavigate } from "react-router-dom";
+import { getBackend } from "@/data";
+import { COMMUNITY_IDS, type CommunityId, type Post } from "@shared/types";
+import { COMMUNITY_META } from "@shared/constants";
+import { addDays, moscowParts } from "@shared/moscow";
+import { Badge, Button, Field, Input, PageHead, Select, Textarea, Toggle } from "@/components/ui";
+import { CommunityAvatar } from "@/components/layout";
+import { toast } from "@/components/toast";
+import { formatMoscow, fromDatetimeLocalMoscow } from "@/lib/time";
+import type { AiGenerationRecord, AiProvidersPayload } from "@shared/types";
+import type { Idea } from "@shared/content-engine";
+import { Bot, Image as ImageIcon, Lightbulb, MoreHorizontal, Pencil, RefreshCw, Send, ShieldCheck, Sparkles } from "lucide-react";
 
 export default function StudioPage() {
-  const [communityId, setCommunityId] = useState<(typeof COMMUNITY_IDS)[number]>("stories");
-  const [ideas, setIdeas] = useState<any[]>([]);
-  const [post, setPost] = useState<any>(null);
-  const [history, setHistory] = useState<any[]>([]);
-  const [provider, setProvider] = useState<any>(null);
-  const [busy, setBusy] = useState("");
-  const [error, setError] = useState("");
+  const nav = useNavigate();
+  const [communityId, setCommunityId] = useState<CommunityId>("stories");
+  const [topic, setTopic] = useState("");
+  const [withImage, setWithImage] = useState(true);
+  const [date, setDate] = useState(() => addDays(moscowParts().dateStr, 1));
+  const [time, setTime] = useState("13:30");
+  const [generating, setGenerating] = useState(false);
+  const [ideasBusy, setIdeasBusy] = useState(false);
+  const [ideas, setIdeas] = useState<Idea[]>([]);
+  const [post, setPost] = useState<Post | null>(null);
+  const [history, setHistory] = useState<AiGenerationRecord[]>([]);
+  const [provider, setProvider] = useState<AiProvidersPayload | null>(null);
+  const [mobilePreview, setMobilePreview] = useState(false);
 
   useEffect(() => {
-    api("/api/ai/providers").then(setProvider);
-    api<{ generations: any[] }>("/api/ai/history").then((r) => setHistory(r.generations));
+    const b = getBackend();
+    b.providers().then(setProvider).catch(() => setProvider(null));
+    b.aiHistory().then(setHistory).catch(() => setHistory([]));
   }, []);
 
-  async function loadIdeas() {
-    setBusy("ideas");
-    setError("");
+  async function generate() {
+    setGenerating(true);
     try {
-      const r = await api<{ ideas: any[] }>("/api/ai/ideas", {
-        method: "POST",
-        body: JSON.stringify({ communityId }),
+      const r = await getBackend().generateSlot({
+        communityId,
+        scheduledAt: fromDatetimeLocalMoscow(`${date}T${time}`),
+        kind: withImage ? "full_post" : "text",
+        prompt: topic.trim() || undefined,
+        force: true,
       });
-      setIdeas(r.ideas);
+      setPost(r);
+      getBackend().aiHistory().then(setHistory).catch(() => undefined);
+      toast("Публикация сгенерирована. Она ждёт вашего одобрения.");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка");
+      toast(e instanceof Error ? e.message : "Ошибка", "error");
     } finally {
-      setBusy("");
+      setGenerating(false);
     }
   }
 
-  async function generate(time = "13:30") {
-    setBusy("gen");
-    setError("");
+  async function loadIdeas() {
+    setIdeasBusy(true);
     try {
-      const r = await api<{ post: any }>("/api/ai/generate-slot", {
-        method: "POST",
-        body: JSON.stringify({ communityId, scheduledAt: nextSlotIso(time), force: true }),
-      });
-      setPost(r.post);
-      const h = await api<{ generations: any[] }>("/api/ai/history");
-      setHistory(h.generations);
+      const r = await getBackend().ideas(communityId);
+      setIdeas(r);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка");
+      toast(e instanceof Error ? e.message : "Ошибка", "error");
     } finally {
-      setBusy("");
+      setIdeasBusy(false);
     }
   }
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[1fr_320px] animate-fade-in">
-      <div className="space-y-5">
-        <div>
-          <h1 className="text-2xl font-extrabold">ИИ-студия</h1>
-          <p className="text-sm text-muted-fg">
-            Идеи, текст и изображение. Если ключ AI не задан — работает тестовый движок, это явно не «боевая» модель.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {COMMUNITY_IDS.map((id) => (
-            <Button key={id} size="sm" variant={communityId === id ? "primary" : "outline"} onClick={() => setCommunityId(id)}>
-              {id}
-            </Button>
-          ))}
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button onClick={loadIdeas} disabled={!!busy}>{busy === "ideas" ? "…" : "Сгенерировать идеи"}</Button>
-          <Button variant="soft" onClick={() => generate("13:30")} disabled={!!busy}>
-            {busy === "gen" ? "Генерация…" : "Полный пост на завтра 13:30"}
-          </Button>
-        </div>
-        {error && <Card className="border-rose-500/30 bg-rose-500/10 p-3 text-sm">{error}</Card>}
-        {provider && (
-          <p className="text-xs text-muted-fg">
-            Провайдер: {provider.label}. Референсы персонажей: {provider.supportsReferences ? "да" : "выбранный движок не обещает точное сходство"}.
-            Ключ: {provider.configuredKey ? "задан" : "нет"}.
-          </p>
-        )}
-        <div className="grid gap-3 md:grid-cols-2">
-          {ideas.map((idea) => (
-            <Card key={idea.key} className="p-4">
-              <div className="text-xs text-muted-fg">{idea.series || "идея"}</div>
-              <div className="font-bold">{idea.title}</div>
-              <p className="mt-2 text-sm text-muted-fg">{idea.angle}</p>
-            </Card>
-          ))}
-        </div>
-        {post && (
-          <Card className="p-5 space-y-3">
-            <div className="flex justify-between gap-2">
-              <h2 className="font-bold">{post.title}</h2>
-              <Link className="text-sm text-accent" to={`/posts/${post.id}`}>Открыть карточку →</Link>
+    <div className="page enter">
+      <PageHead
+        title="AI-студия"
+        description="Создавайте публикации в голосе вашего сообщества."
+        actions={
+          <Badge tone="purple">
+            <Sparkles size={12} /> {provider ? provider.label : "AI-модель"}
+          </Badge>
+        }
+      />
+
+      <div className="studio-grid">
+        <section className="surface studio-settings">
+          <div className="section-head">
+            <div>
+              <h2>Новая публикация</h2>
+              <p>Настройте идею и стиль контента</p>
             </div>
-            {post.imagePath && <img src={post.imagePath} className="max-h-80 w-full rounded-xl object-cover" alt="" />}
-            <p className="whitespace-pre-wrap text-sm leading-6">{post.text}</p>
-            {post.generationMeta?.warnings?.length > 0 && (
-              <ul className="text-xs text-amber-700">
-                {post.generationMeta.warnings.map((w: string) => <li key={w}>{w}</li>)}
-              </ul>
+            <button
+              className="icon-btn"
+              onClick={loadIdeas}
+              disabled={ideasBusy}
+              title="Сгенерировать идеи для сообщества"
+            >
+              {ideasBusy ? <RefreshCw size={17} className="spin" /> : <Lightbulb size={17} />}
+            </button>
+          </div>
+
+          <Field label="Сообщество">
+            <div className="field-control">
+              <CommunityAvatar id={communityId} size="sm" />
+              <Select value={communityId} onChange={(e) => setCommunityId(e.target.value as CommunityId)} style={{ border: 0, background: "transparent", minHeight: 36 }}>
+                {COMMUNITY_IDS.map((id) => (
+                  <option key={id} value={id}>
+                    {COMMUNITY_META[id].name}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          </Field>
+
+          <Field label="Тема публикации" hint="Опишите сюжет или основную мысль — или оставьте пустым, и движок предложит свою идею">
+            <Textarea
+              value={topic}
+              onChange={(e) => setTopic(e.target.value)}
+              placeholder="Например: Милана собирается на сельскую дискотеку и выбирает образ, который точно запомнят все соседи"
+            />
+          </Field>
+
+          <div className="field-row">
+            <Field label="Дата (Москва)">
+              <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+            </Field>
+            <Field label="Слот">
+              <Select value={time} onChange={(e) => setTime(e.target.value)}>
+                {["13:30", "17:30", "21:30"].map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+
+          <div className="toggle-row">
+            <div>
+              <ImageIcon size={17} />
+              <span>
+                <b>Создать изображение</b>
+                <small>Демо-режим рисует карточку-заглушку, платные API не вызываются</small>
+              </span>
+            </div>
+            <Toggle on={withImage} onChange={setWithImage} title="Генерировать изображение вместе с текстом" />
+          </div>
+
+          {provider && (
+            <p className="mono" style={{ margin: "10px 0 0", lineHeight: 1.7 }}>
+              Провайдер: {provider.label} · ключ {provider.configuredKey ? "задан" : "не задан"} · референсы{" "}
+              {provider.supportsReferences ? "поддерживаются" : "не поддерживаются (сходство не гарантируется)"}
+              {provider.demo ? " · демо-движок" : ""}
+            </p>
+          )}
+          {provider?.limitations?.length ? (
+            <ul style={{ margin: "8px 0 0", paddingLeft: 16, fontSize: 10, color: "var(--muted)", lineHeight: 1.7 }}>
+              {provider.limitations.map((l) => (
+                <li key={l}>{l}</li>
+              ))}
+            </ul>
+          ) : null}
+
+          <Button className="generate-btn" onClick={generate} disabled={generating}>
+            {generating ? (
+              <>
+                <RefreshCw className="spin" size={17} /> Создаём магию…
+              </>
+            ) : (
+              <>
+                <Sparkles size={17} /> Сгенерировать пост
+              </>
             )}
-          </Card>
-        )}
+          </Button>
+
+          {ideas.length > 0 && (
+            <div style={{ marginTop: 18 }}>
+              <div className="section-head">
+                <div>
+                  <h2 style={{ fontSize: 14 }}>Идеи для «{COMMUNITY_META[communityId as keyof typeof COMMUNITY_META]?.shortName}»</h2>
+                  <p>Нажмите «Сгенерировать пост» — движок разовьёт идею в текст</p>
+                </div>
+              </div>
+              <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+                {ideas.map((idea) => (
+                  <div className="idea-card" key={idea.key} onClick={() => setTopic(idea.title + ". " + idea.angle)} style={{ cursor: "pointer" }}>
+                    <span className="mono">{idea.series || idea.topic}</span>
+                    <b>{idea.title}</b>
+                    <p>{idea.angle}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+
+        <section className="preview-wrap">
+          <div className="preview-top">
+            <div>
+              <b>Предпросмотр</b>
+              <span>Так публикация будет выглядеть во ВКонтакте</span>
+            </div>
+            <div className="desktop-mobile">
+              <button className={!mobilePreview ? "active" : ""} onClick={() => setMobilePreview(false)}>
+                Десктоп
+              </button>
+              <button className={mobilePreview ? "active" : ""} onClick={() => setMobilePreview(true)}>
+                Телефон
+              </button>
+            </div>
+          </div>
+
+          <div className={`vk-post ${generating ? "loading" : ""}`} style={mobilePreview ? { maxWidth: 380 } : undefined}>
+            {generating ? (
+              <div className="skeletons">
+                <i />
+                <i />
+                <i />
+                <i />
+              </div>
+            ) : post ? (
+              <>
+                <div className="vk-head">
+                  <CommunityAvatar id={post.communityId} />
+                  <div>
+                    <b>{COMMUNITY_META[post.communityId]?.name ?? post.communityId}</b>
+                    <span>{post.testMode ? "предпросмотр · dry-run" : "предпросмотр"}</span>
+                  </div>
+                  <MoreHorizontal size={20} />
+                </div>
+                {post.title && <p style={{ fontWeight: 600 }}>{post.title}</p>}
+                <p>{post.text}</p>
+                {(post.imageUrl || post.imagePath) && (
+                  <img className="vk-image" src={post.imageUrl || post.imagePath!} alt="Иллюстрация к публикации" />
+                )}
+              </>
+            ) : (
+              <>
+                <div className="vk-head">
+                  <CommunityAvatar id={communityId} />
+                  <div>
+                    <b>{COMMUNITY_META[communityId as keyof typeof COMMUNITY_META]?.name}</b>
+                    <span>здесь появится сгенерированный текст</span>
+                  </div>
+                  <MoreHorizontal size={20} />
+                </div>
+                <p style={{ color: "#818c99" }}>
+                  Настройте параметры слева и нажмите «Сгенерировать пост». Если ключ AI не задан, работает тестовый
+                  детерминированный движок — это честно указано и не выдаётся за боевую модель.
+                </p>
+              </>
+            )}
+          </div>
+
+          {post && (
+            <>
+              <div className="preview-status">
+                <Badge tone={post.status === "review" ? "warning" : "purple"}>
+                  {post.status === "review" ? "На проверке" : "Готово к проверке"}
+                </Badge>
+                <span>
+                  <Send size={14} /> Запланировано на {formatMoscow(post.scheduledAt)} МСК
+                </span>
+              </div>
+              <div className="preview-actions">
+                <Button variant="secondary" onClick={() => nav(`/posts/${post.id}`)}>
+                  <Pencil size={15} /> Редактировать
+                </Button>
+                <Button variant="secondary" onClick={generate} disabled={generating}>
+                  <RefreshCw size={15} /> Перегенерировать
+                </Button>
+                <Button onClick={() => nav("/posts")}>
+                  <ShieldCheck size={15} /> На проверку
+                </Button>
+              </div>
+            </>
+          )}
+
+          <section className="surface" style={{ padding: 18, marginTop: 18 }}>
+            <div className="section-head">
+              <div>
+                <h2>История генераций</h2>
+                <p>Все вызовы движка фиксируются вместе с расходом</p>
+              </div>
+              <Bot size={16} style={{ color: "var(--muted)" }} />
+            </div>
+            <ul className="history-list">
+              {history.map((g) => (
+                <li key={g.id}>
+                  <b>{g.type}</b>
+                  <span style={{ color: "var(--muted)" }}>{g.provider}</span>
+                  <span className={`mono ${g.error ? "danger" : ""}`}>
+                    {g.error ? "ошибка" : `$${Number(g.costUsd || 0).toFixed(3)}`}
+                  </span>
+                </li>
+              ))}
+              {history.length === 0 && (
+                <li style={{ color: "var(--muted)", border: 0 }}>Пока пусто — сгенерируйте первую публикацию</li>
+              )}
+            </ul>
+          </section>
+        </section>
       </div>
-      <Card className="p-4 h-fit">
-        <h2 className="font-bold">История генераций</h2>
-        <ul className="mt-3 space-y-3 text-sm">
-          {history.map((g) => (
-            <li key={g.id} className="border-b border-line pb-2">
-              <div className="font-medium">{g.type} · {g.provider}</div>
-              <div className="text-xs text-muted-fg">{g.status} · ${Number(g.cost_usd || 0).toFixed(3)}</div>
-              {g.error && <div className="text-xs text-rose-600">{g.error}</div>}
-            </li>
-          ))}
-          {history.length === 0 && <li className="text-muted-fg">Пока пусто</li>}
-        </ul>
-      </Card>
     </div>
   );
 }

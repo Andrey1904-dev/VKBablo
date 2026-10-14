@@ -1,79 +1,238 @@
-import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import { api, STATUS_LABEL, STATUS_TONE, COMMUNITY_COLOR } from "@/lib/api";
-import { Badge, Card } from "@/components/ui";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { getBackend } from "@/data";
+import { STATUS_LABEL, STATUS_TONE } from "@/lib/api";
+import { COMMUNITY_IDS, type Post, type PostFilters } from "@shared/types";
+import { COMMUNITY_META } from "@shared/constants";
+import { Badge, Button, Empty, PageHead } from "@/components/ui";
+import { CommunityAvatar } from "@/components/layout";
+import { toast } from "@/components/toast";
 import { formatMoscow } from "@/lib/time";
+import { Check, CheckCircle2, ChevronRight, Clock3, Inbox, MoreHorizontal, Pencil, RefreshCw, Search, ShieldCheck, X } from "lucide-react";
 
-const STATUSES = ["", "review", "needs_revision", "approved", "scheduled", "published", "error", "draft", "rejected"];
-const COMM = ["", "stories", "milana", "life", "veronica"];
+const QUICK: { key: string; label: string; statuses?: string[] }[] = [
+  { key: "", label: "Все" },
+  { key: "review", label: "На проверке", statuses: ["review", "needs_revision"] },
+  { key: "approved", label: "Одобрены", statuses: ["approved", "scheduled"] },
+  { key: "published", label: "Опубликованы", statuses: ["published"] },
+  { key: "draft", label: "Черновики", statuses: ["draft"] },
+];
 
 export default function PostsPage() {
-  const [posts, setPosts] = useState<any[]>([]);
-  const [status, setStatus] = useState("");
+  const [params, setParams] = useSearchParams();
+  const nav = useNavigate();
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  const [posts, setPosts] = useState<Post[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [communityId, setCommunityId] = useState("");
   const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  const quick = params.get("tab") ?? "";
+  const statusParam = params.get("status") ?? "";
+  const quickDef = QUICK.find((x) => x.key === quick);
 
   async function load() {
-    const p = new URLSearchParams();
-    if (status) p.set("status", status);
-    if (communityId) p.set("communityId", communityId);
-    if (q) p.set("q", q);
-    const r = await api<{ posts: any[] }>(`/api/posts?${p.toString()}`);
-    setPosts(r.posts);
+    const filters: PostFilters = { limit: 300 };
+    if (communityId) filters.communityId = communityId as PostFilters["communityId"];
+    if (q.trim()) filters.q = q.trim();
+    const r = await getBackend().posts(filters);
+    setPosts(r);
+    setLoaded(true);
   }
+
   useEffect(() => {
     load();
-  }, [status, communityId]);
+  }, [communityId]);
+
+  useEffect(() => {
+    const focus = () => searchRef.current?.focus();
+    window.addEventListener("vkai:focus-search", focus);
+    return () => window.removeEventListener("vkai:focus-search", focus);
+  }, []);
+
+  // Фильтр по статусу — на клиенте: быстрые вкладки могут объединять несколько статусов.
+  const visible = useMemo(() => {
+    return posts.filter((p) => {
+      if (statusParam) return p.status === statusParam;
+      if (quickDef?.statuses) return quickDef.statuses.includes(p.status);
+      if (quickDef?.key) return p.status === quickDef.key;
+      return true;
+    });
+  }, [posts, statusParam, quickDef]);
+
+  const selected = useMemo(
+    () => visible.find((p) => p.id === selectedId) ?? visible[0] ?? null,
+    [visible, selectedId],
+  );
+
+  async function act(fn: () => Promise<unknown>, okText: string) {
+    if (!selected) return;
+    setBusy(true);
+    try {
+      await fn();
+      toast(okText);
+      await load();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Ошибка", "error");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
-    <div className="space-y-5 animate-fade-in">
-      <div>
-        <h1 className="text-2xl font-extrabold">Публикации</h1>
-        <p className="text-sm text-muted-fg">Фильтры, предпросмотр и согласование.</p>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        <select className="h-11 rounded-xl border border-line bg-card px-3 text-sm" value={communityId} onChange={(e) => setCommunityId(e.target.value)}>
-          {COMM.map((id) => (
-            <option key={id} value={id}>{id || "Все сообщества"}</option>
+    <div className="page enter">
+      <PageHead
+        title="На проверке"
+        description="Проверьте контент перед публикацией. Одобрение обязательно для каждого поста."
+        actions={
+          <Badge tone={visible.filter((p) => p.status === "review" || p.status === "needs_revision").length > 0 ? "warning" : "success"}>
+            {visible.filter((p) => p.status === "review" || p.status === "needs_revision").length} ожидают решения
+          </Badge>
+        }
+      />
+
+      <div className="review-filters">
+        <div className="segmented">
+          {QUICK.map((x) => (
+            <button
+              key={x.key}
+              className={quick === x.key ? "active" : ""}
+              onClick={() => setParams(x.key ? { tab: x.key } : {})}
+            >
+              {x.label}
+            </button>
+          ))}
+        </div>
+        <div className="search">
+          <Search size={16} />
+          <input
+            ref={searchRef}
+            placeholder="Найти публикацию…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && load()}
+          />
+        </div>
+        <select className="select-btn" value={communityId} onChange={(e) => setCommunityId(e.target.value)}>
+          <option value="">Все сообщества</option>
+          {COMMUNITY_IDS.map((id) => (
+            <option key={id} value={id}>
+              {COMMUNITY_META[id].shortName}
+            </option>
           ))}
         </select>
-        <select className="h-11 rounded-xl border border-line bg-card px-3 text-sm" value={status} onChange={(e) => setStatus(e.target.value)}>
-          {STATUSES.map((s) => (
-            <option key={s} value={s}>{s ? STATUS_LABEL[s] : "Все статусы"}</option>
-          ))}
-        </select>
-        <input
-          className="h-11 flex-1 min-w-[180px] rounded-xl border border-line bg-card px-3 text-sm"
-          placeholder="Поиск по тексту"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && load()}
-        />
       </div>
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {posts.map((p) => (
-          <Link key={p.id} to={`/posts/${p.id}`}>
-            <Card className="overflow-hidden transition hover:shadow-lift">
-              {p.imagePath && (
-                <div className="aspect-[16/10] bg-muted">
-                  <img src={p.imagePath} alt="" className="h-full w-full object-cover" />
+
+      {loaded && visible.length === 0 ? (
+        <div className="surface">
+          <Empty
+            icon={Inbox}
+            title="Публикаций пока нет"
+            text="Создайте пост вручную или сгенерируйте его в AI-студии — он появится здесь и потребует одобрения."
+            action={
+              <Button onClick={() => nav("/studio")}>
+                <ShieldCheck size={16} /> Открыть AI-студию
+              </Button>
+            }
+          />
+        </div>
+      ) : (
+        <div className="review-grid">
+          <aside className="review-list">
+            {visible.map((p) => {
+              const meta = COMMUNITY_META[p.communityId];
+              return (
+                <button
+                  key={p.id}
+                  className={p.id === selectedId ? "active" : ""}
+                  onClick={() => setSelectedId(p.id)}
+                >
+                  <CommunityAvatar id={p.communityId} />
+                  <span>
+                    <b>{meta?.name ?? p.communityId}</b>
+                    <small>{p.title || p.topic}</small>
+                    <em>
+                      <Clock3 size={12} />
+                      {formatMoscow(p.scheduledAt)}
+                    </em>
+                  </span>
+                  {p.status === "approved" || p.status === "published" || p.status === "scheduled" ? (
+                    <CheckCircle2 className="green" size={18} />
+                  ) : (
+                    <ChevronRight className="chev" size={16} />
+                  )}
+                </button>
+              );
+            })}
+          </aside>
+
+          {selected ? (
+            <section className="review-preview">
+              <div className="review-preview-head">
+                <div>
+                  <Badge tone={STATUS_TONE[selected.status] ?? "neutral"}>{STATUS_LABEL[selected.status] ?? selected.status}</Badge>
+                  {selected.testMode && <Badge tone="neutral">dry-run</Badge>}
+                  <span>
+                    версия {selected.version} · создано {formatMoscow(selected.createdAt)}
+                  </span>
                 </div>
-              )}
-              <div className="space-y-2 p-4">
-                <div className="flex items-center gap-2">
-                  <span className="h-2 w-2 rounded-full" style={{ background: COMMUNITY_COLOR[p.communityId] }} />
-                  <span className="text-xs text-muted-fg">{p.communityId}</span>
-                  <Badge className={STATUS_TONE[p.status]}>{STATUS_LABEL[p.status]}</Badge>
-                </div>
-                <div className="font-bold">{p.title || p.topic}</div>
-                <p className="line-clamp-3 text-sm text-muted-fg">{p.text}</p>
-                <div className="text-xs text-muted-fg">{formatMoscow(p.scheduledAt)}</div>
+                <Link to={`/posts/${selected.id}`} className="icon-btn" title="Полный редактор">
+                  <MoreHorizontal size={18} />
+                </Link>
               </div>
-            </Card>
-          </Link>
-        ))}
-      </div>
-      {posts.length === 0 && <p className="text-sm text-muted-fg">Нет публикаций по фильтру.</p>}
+
+              <div className="review-post">
+                <div className="vk-head">
+                  <CommunityAvatar id={selected.communityId} />
+                  <div>
+                    <b>{COMMUNITY_META[selected.communityId]?.name ?? selected.communityId}</b>
+                    <span>{formatMoscow(selected.scheduledAt)}</span>
+                  </div>
+                </div>
+                <p>
+                  <b>{selected.title || selected.topic}</b>
+                </p>
+                <p style={{ whiteSpace: "pre-wrap" }}>{selected.text || "Текст ещё не сгенерирован."}</p>
+                {(selected.imageUrl || selected.imagePath) && (
+                  <img src={selected.imageUrl || selected.imagePath!} alt="" />
+                )}
+                {selected.errorMessage && (
+                  <p style={{ color: "var(--red)", fontSize: 12 }}>{selected.errorMessage}</p>
+                )}
+              </div>
+
+              <div className="review-bar">
+                <Button variant="ghost" disabled={busy} onClick={() => act(() => getBackend().rejectPost(selected.id), "Публикация отклонена")}>
+                  <X size={16} /> Отклонить
+                </Button>
+                <Button
+                  variant="secondary"
+                  disabled={busy}
+                  onClick={() => act(() => getBackend().revisePost(selected.id, "all"), "Отправлено на доработку")}
+                >
+                  <RefreshCw size={16} /> На доработку
+                </Button>
+                <Button variant="secondary" disabled={busy} onClick={() => nav(`/posts/${selected.id}`)}>
+                  <Pencil size={15} /> Редактировать
+                </Button>
+                <Button
+                  disabled={busy || selected.status === "approved" || selected.status === "published"}
+                  onClick={() => act(() => getBackend().approvePost(selected.id), "Публикация одобрена и добавлена в расписание")}
+                >
+                  <Check size={17} /> {selected.status === "approved" ? "Одобрено" : "Одобрить"}
+                </Button>
+              </div>
+            </section>
+          ) : (
+            <section className="review-preview">
+              <Empty icon={Inbox} title="Выберите публикацию" text="Список слева — все публикации с учётом фильтров." />
+            </section>
+          )}
+        </div>
+      )}
     </div>
   );
 }
