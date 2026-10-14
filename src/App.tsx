@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { getBackend } from "@/data";
+import type { UserPublic } from "@shared/types";
 import { AppShell } from "@/components/layout";
 import LoginPage from "@/pages/LoginPage";
 import DashboardPage from "@/pages/DashboardPage";
@@ -15,10 +16,8 @@ import AnalyticsPage from "@/pages/AnalyticsPage";
 import SettingsPage from "@/pages/SettingsPage";
 import NotificationsPage from "@/pages/NotificationsPage";
 
-type User = { id: number; email: string; name: string; role: string };
-
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<UserPublic | null>(null);
   const [setup, setSetup] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(true);
   const loc = useLocation();
@@ -27,7 +26,7 @@ export default function App() {
     let alive = true;
     (async () => {
       try {
-        const s = await api<{ setupComplete: boolean; user: User | null }>("/api/auth/status");
+        const s = await getBackend().auth.status();
         if (!alive) return;
         setSetup(s.setupComplete);
         setUser(s.user);
