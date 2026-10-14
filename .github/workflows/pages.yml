@@ -56,3 +56,12 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+      - name: Проверка живого сайта
+        run: |
+          url="${{ steps.deployment.outputs.page_url }}"
+          sleep 8
+          html="$(curl -fsSL "$url")" || { echo "Не удалось загрузить $url"; exit 1; }
+          echo "$html" | grep -q 'assets/index-.*\.js' || { echo "Сайт не отдаёт собранный бандл. HTML:"; echo "$html" | head -30; exit 1; }
+          asset="$(echo "$html" | grep -o 'assets/index-[^"]*\.js' | head -1)"
+          curl -fsSL -o /dev/null "$url$asset" || { echo "Бандл недоступен: $url$asset"; exit 1; }
+          echo "✅ Сайт отдаёт собранный интерфейс: $url$asset"
