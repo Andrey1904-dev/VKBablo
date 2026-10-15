@@ -57,8 +57,15 @@ for (const storage of ["available", "denied", "quota-exceeded"] as const) {
     if (process.env.PAGES_EXPECTED_SHA) {
       // CDN can still serve the previous deployment. Reload until this revision is visible.
       await expect(async () => {
-        await page.reload();
-        await expect(page.locator('meta[name="vkbablo-build"]')).toHaveAttribute("content", process.env.PAGES_EXPECTED_SHA!, { timeout: 1000 });
+        // Finish startup API requests before navigating. WebKit reports a reload
+        // that interrupts setup-state as a network failure even after HTTP 200.
+        await page.waitForLoadState("networkidle");
+        const revision = page.locator('meta[name="vkbablo-build"]');
+        if (await revision.getAttribute("content") !== process.env.PAGES_EXPECTED_SHA) {
+          await page.reload();
+          await page.waitForLoadState("networkidle");
+        }
+        await expect(revision).toHaveAttribute("content", process.env.PAGES_EXPECTED_SHA!, { timeout: 1000 });
       }).toPass({ timeout: 120_000, intervals: [5000, 10000] });
     }
     await expect(page.getByRole("heading", {
