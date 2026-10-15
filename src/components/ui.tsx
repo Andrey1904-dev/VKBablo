@@ -161,7 +161,7 @@ export function Field({
 }
 
 /* ---------- Переключатель (тумблер из макета) ---------- */
-export function Toggle({ on, onChange, title }: { on: boolean; onChange: (v: boolean) => void; title?: string }) {
+export function Toggle({ on, onChange, title, disabled = false }: { on: boolean; onChange: (v: boolean) => void; title?: string; disabled?: boolean }) {
   return (
     <button
       type="button"
@@ -170,6 +170,7 @@ export function Toggle({ on, onChange, title }: { on: boolean; onChange: (v: boo
       aria-pressed={on}
       title={title}
       aria-label={title}
+      disabled={disabled}
     >
       <i />
     </button>

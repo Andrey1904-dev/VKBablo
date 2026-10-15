@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { AuthUser } from "./auth.ts";
 import {
-  createUser,
+  createFirstOwner,
   currentUser,
   login,
   logout,
@@ -10,7 +10,7 @@ import {
   requireUser,
   userCount,
 } from "./auth.ts";
-import { all, get, run, setSetting, setting } from "./db.ts";
+import { all, get, run, setSetting, setting, withImmediateTransaction } from "./db.ts";
 import { env, supabasePublic } from "./env.ts";
 import { HttpError, moscowParts, nid, nowIso, requireParam } from "./lib.ts";
 import { audit, listNotifications, markRead, unreadCount } from "./notify.ts";
@@ -25,14 +25,15 @@ import {
   rejectPost,
   requestRevision,
   scheduleToVk,
+  unscheduleLocalPost,
   updatePost,
   upcomingSlots,
 } from "./posts.ts";
 import { enqueueUpcomingGeneration, listJobs, processOnce } from "./queue.ts";
 import { monthSpendUsd, getAdapter, getAiKey, saveAiKey, generateIdea, logGeneration } from "./ai.ts";
-import { communityToken, getVk, saveCommunityToken } from "./vk.ts";
+import { communityToken, saveCommunityToken } from "./vk.ts";
 import { putMedia, readLocalUpload, signedUrl } from "./storage.ts";
-import { COMMUNITY_META } from "../shared/constants.ts";
+import { APP_LIMITS, COMMUNITY_META } from "../shared/constants.ts";
 import { COMMUNITY_IDS, type CommunityId, type PostStatus } from "../shared/types.ts";
 import { hashPassword, verifyPassword } from "./lib.ts";
 
@@ -43,7 +44,7 @@ export function createApp() {
 
   app.onError((err, c) => {
     const status = err instanceof HttpError ? err.status : 500;
-    if (status >= 500) console.error(err);
+    if (status >= 500 && status !== 501) console.error(err);
     return c.json({ error: err.message || "Внутренняя ошибка" }, status as ContentfulStatusCode);
   });
 
@@ -61,7 +62,7 @@ export function createApp() {
     } catch (e) {
       const status = e instanceof HttpError ? e.status : 500;
       const message = e instanceof Error ? e.message : "Внутренняя ошибка";
-      if (status >= 500) console.error(e);
+      if (status >= 500 && status !== 501) console.error(e);
       return c.json({ error: message }, status as ContentfulStatusCode);
     }
   });
@@ -71,7 +72,7 @@ export function createApp() {
       ok: true,
       time: nowIso(),
       moscow: moscowParts(),
-      mode: setting("app_mode", env("APP_MODE", "test")),
+      mode: setting("app_mode", "test"),
       supabase: supabasePublic(),
     }),
   );
@@ -100,8 +101,7 @@ export function createApp() {
     const password = String(body.password || "");
     const name = String(body.name || "Владелец").trim();
     if (!email.includes("@")) throw new HttpError(400, "Укажите корректный email");
-    const user = createUser(email, password, name);
-    setSetting("setup_complete", "1");
+    const user = createFirstOwner(email, password, name);
     login(email, password, c);
     audit({ userId: user.id, action: "setup", entityType: "user", entityId: String(user.id) });
     return c.json({ user });
@@ -179,14 +179,14 @@ export function createApp() {
     return Response.json({ communities: rows.map(mapCommunity) });
   });
 
-  app.get("/api/communities/:id", requireUser, (c) => {
+  app.get("/api/communities/:id", requireUser, async (c) => {
     const id = requireParam(c, "id");
     const row = get<Record<string, unknown>>("SELECT * FROM communities WHERE id = ?", id);
     if (!row) throw new HttpError(404, "Сообщество не найдено");
-    const characters = all<Record<string, unknown>>(
+    const characters = await Promise.all(all<Record<string, unknown>>(
       "SELECT * FROM characters WHERE community_id = ?",
       id,
-    ).map(mapCharacter);
+    ).map(mapCharacter));
     const stats = all<{ status: string; c: number }>(
       "SELECT status, COUNT(*) AS c FROM posts WHERE community_id = ? GROUP BY status",
       id,
@@ -231,14 +231,9 @@ export function createApp() {
       saveCommunityToken(id, null);
       return c.json({ connected: false });
     }
-    const vk = getVk();
-    const check = await vk.checkToken(token);
-    if (!check.ok && setting("app_mode", "test") === "approval") {
-      throw new HttpError(400, check.error || "VK отклонил токен");
-    }
-    saveCommunityToken(id, token, body.groupId, body.screenName);
-    audit({ userId: c.get("user").id, action: "vk_connect", entityType: "community", entityId: id });
-    return c.json({ connected: true, testMode: vk.testMode, name: check.name });
+    // Local mode is deliberately offline: do not accept or persist real VK credentials
+    // behind a mock "connected" response. Use the protected Supabase Edge adapter instead.
+    throw new HttpError(501, "Локальный backend не подключается к VK и не сохраняет токены. Подключите Supabase.");
   });
 
   app.get("/api/posts", requireUser, (c) => {
@@ -318,6 +313,16 @@ export function createApp() {
     }
     const post = await scheduleToVk(requireParam(c, "id"), c.get("user").id);
     return c.json({ post, dryRun: setting("app_mode", "test") !== "approval" });
+  });
+
+  app.post("/api/posts/:id/unschedule", requireUser, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const post = unscheduleLocalPost(
+      requireParam(c, "id"),
+      c.get("user").id,
+      String(body.reason || "отменено владельцем").slice(0, 300),
+    );
+    return c.json({ post, status: post.status, dryRun: true });
   });
 
   app.post("/api/posts/:id/generate", requireUser, async (c) => {
@@ -408,12 +413,12 @@ export function createApp() {
 
   app.get("/api/jobs", requireUser, (c) => c.json({ jobs: listJobs(80) }));
 
-  app.get("/api/characters", requireUser, (c) => {
+  app.get("/api/characters", requireUser, async (c) => {
     const communityId = c.req.query("communityId");
     const rows = communityId
       ? all<Record<string, unknown>>("SELECT * FROM characters WHERE community_id = ?", communityId)
       : all<Record<string, unknown>>("SELECT * FROM characters");
-    return c.json({ characters: rows.map(mapCharacter) });
+    return c.json({ characters: await Promise.all(rows.map(mapCharacter)) });
   });
 
   app.patch("/api/characters/:id", requireUser, async (c) => {
@@ -431,7 +436,7 @@ export function createApp() {
     if (body.personality) run("UPDATE characters SET personality = ?, updated_at = ? WHERE id = ?", body.personality, nowIso(), id);
     audit({ userId: c.get("user").id, action: "character_update", entityType: "character", entityId: id });
     const row = get<Record<string, unknown>>("SELECT * FROM characters WHERE id = ?", id)!;
-    return c.json({ character: mapCharacter(row) });
+    return c.json({ character: await mapCharacter(row) });
   });
 
   app.post("/api/characters/:id/references", requireUser, async (c) => {
@@ -441,11 +446,17 @@ export function createApp() {
     const body = await c.req.parseBody();
     const file = body.file;
     if (!(file instanceof File)) throw new HttpError(400, "Прикрепите файл");
+    if (file.size <= 0) throw new HttpError(400, "Файл пуст");
+    if (file.size > APP_LIMITS.maxUploadBytes) throw new HttpError(413, "Файл больше 12 МБ");
+    const mime = file.type || "image/jpeg";
+    if (!(APP_LIMITS.allowedMimeTypes as readonly string[]).includes(mime)) {
+      throw new HttpError(400, `Недопустимый тип файла: ${mime}`);
+    }
     const buf = Buffer.from(await file.arrayBuffer());
     const stored = await putMedia({
       folder: "characters",
       bytes: buf,
-      mime: file.type || "image/jpeg",
+      mime,
     });
     const refId = nid("ref");
     run(
@@ -458,6 +469,83 @@ export function createApp() {
       nowIso(),
     );
     return c.json({ id: refId, path: stored.path, url: await signedUrl(stored.path) });
+  });
+
+  app.post("/api/characters/references/:id/approve", requireUser, (c) => {
+    const referenceId = requireParam(c, "id");
+    const reference = get<{ id: string; character_id: string; is_primary: number }>(
+      "SELECT id, character_id, is_primary FROM character_references WHERE id = ?",
+      referenceId,
+    );
+    if (!reference) throw new HttpError(404, "Референс не найден");
+    withImmediateTransaction(() => {
+      run("UPDATE character_references SET approved = 1 WHERE id = ?", referenceId);
+      const primary = get<{ id: string }>(
+        "SELECT id FROM character_references WHERE character_id = ? AND is_primary = 1 AND approved = 1",
+        reference.character_id,
+      );
+      if (!primary) {
+        run("UPDATE character_references SET is_primary = 1 WHERE id = ? AND approved = 1", referenceId);
+        run(
+          "UPDATE characters SET primary_reference_id = ?, appearance_status = 'approved', updated_at = ? WHERE id = ?",
+          referenceId,
+          nowIso(),
+          reference.character_id,
+        );
+      }
+    });
+    audit({ userId: c.get("user").id, action: "character_reference_approve", entityType: "character", entityId: reference.character_id, details: { referenceId } });
+    return c.json({ ok: true });
+  });
+
+  app.post("/api/characters/references/:id/primary", requireUser, (c) => {
+    const referenceId = requireParam(c, "id");
+    const reference = get<{ id: string; character_id: string; approved: number }>(
+      "SELECT id, character_id, approved FROM character_references WHERE id = ?",
+      referenceId,
+    );
+    if (!reference) throw new HttpError(404, "Референс не найден");
+    if (!reference.approved) throw new HttpError(400, "Основным можно сделать только одобренный референс");
+    withImmediateTransaction(() => {
+      run("UPDATE character_references SET is_primary = 0 WHERE character_id = ?", reference.character_id);
+      run("UPDATE character_references SET is_primary = 1 WHERE id = ? AND approved = 1", referenceId);
+      run(
+        "UPDATE characters SET primary_reference_id = ?, appearance_status = 'approved', updated_at = ? WHERE id = ?",
+        referenceId,
+        nowIso(),
+        reference.character_id,
+      );
+    });
+    audit({ userId: c.get("user").id, action: "character_reference_primary", entityType: "character", entityId: reference.character_id, details: { referenceId } });
+    return c.json({ ok: true });
+  });
+
+  app.delete("/api/characters/references/:id", requireUser, (c) => {
+    const referenceId = requireParam(c, "id");
+    const reference = get<{ id: string; character_id: string; is_primary: number }>(
+      "SELECT id, character_id, is_primary FROM character_references WHERE id = ?",
+      referenceId,
+    );
+    if (!reference) throw new HttpError(404, "Референс не найден");
+    withImmediateTransaction(() => {
+      run("DELETE FROM character_references WHERE id = ?", referenceId);
+      if (reference.is_primary) {
+        const next = get<{ id: string }>(
+          "SELECT id FROM character_references WHERE character_id = ? AND approved = 1 ORDER BY created_at DESC LIMIT 1",
+          reference.character_id,
+        );
+        if (next) run("UPDATE character_references SET is_primary = 1 WHERE id = ?", next.id);
+        run(
+          "UPDATE characters SET primary_reference_id = ?, appearance_status = ?, updated_at = ? WHERE id = ?",
+          next?.id ?? null,
+          next ? "approved" : "placeholder",
+          nowIso(),
+          reference.character_id,
+        );
+      }
+    });
+    audit({ userId: c.get("user").id, action: "character_reference_delete", entityType: "character", entityId: reference.character_id, details: { referenceId } });
+    return c.json({ ok: true });
   });
 
   app.get("/api/analytics", requireUser, (c) => {
@@ -480,8 +568,9 @@ export function createApp() {
 
   app.get("/api/settings", requireUser, (c) => {
     return c.json({
-      mode: setting("app_mode", "test"),
+      mode: "test",
       automationPaused: setting("automation_paused", "0") === "1",
+      realPublishEnabled: false,
       timezone: "Europe/Moscow",
       prepareHoursAhead: Number(setting("prepare_hours_ahead", "24")),
       aiMonthlyLimitUsd: Number(setting("ai_monthly_limit_usd", "20")),
@@ -502,7 +591,10 @@ export function createApp() {
   app.patch("/api/settings", requireUser, async (c) => {
     const body = await c.req.json();
     const user = c.get("user");
-    if (body.mode === "test" || body.mode === "approval") setSetting("app_mode", body.mode);
+    if (body.mode === "approval" || body.realPublishEnabled === true) {
+      throw new HttpError(501, "Локальный Node/SQLite backend — только dry-run; реальные публикации доступны через защищённый Supabase worker.");
+    }
+    if (body.mode === "test") setSetting("app_mode", "test");
     if (typeof body.prepareHoursAhead === "number") setSetting("prepare_hours_ahead", String(body.prepareHoursAhead));
     if (typeof body.aiMonthlyLimitUsd === "number") setSetting("ai_monthly_limit_usd", String(body.aiMonthlyLimitUsd));
     if (body.aiProvider) setSetting("ai_provider", body.aiProvider);
@@ -560,11 +652,20 @@ export function createApp() {
     const body = await c.req.parseBody();
     const file = body.file;
     if (!(file instanceof File)) throw new HttpError(400, "Нет файла");
+    if (file.size <= 0) throw new HttpError(400, "Файл пуст");
+    if (file.size > APP_LIMITS.maxUploadBytes) throw new HttpError(413, "Файл больше 12 МБ");
+    const folderValue = typeof body.folder === "string" ? body.folder : "posts";
+    const allowedFolders = ["posts", "characters", "communities", "generated", "archive"] as const;
+    if (!(allowedFolders as readonly string[]).includes(folderValue)) throw new HttpError(400, "Недопустимая папка загрузки");
+    const mime = file.type || "image/jpeg";
+    if (!(APP_LIMITS.allowedMimeTypes as readonly string[]).includes(mime)) {
+      throw new HttpError(400, `Недопустимый тип файла: ${mime}`);
+    }
     const buf = Buffer.from(await file.arrayBuffer());
     const stored = await putMedia({
-      folder: (body.folder as "posts") || "posts",
+      folder: folderValue as (typeof allowedFolders)[number],
       bytes: buf,
-      mime: file.type || "image/jpeg",
+      mime,
     });
     return c.json({ path: stored.path, url: await signedUrl(stored.path) });
   });
@@ -624,11 +725,21 @@ function mapCommunity(r: Record<string, unknown>) {
   };
 }
 
-function mapCharacter(r: Record<string, unknown>) {
+async function mapCharacter(r: Record<string, unknown>) {
   const refs = all<Record<string, unknown>>(
     "SELECT * FROM character_references WHERE character_id = ? ORDER BY created_at DESC",
     r.id,
   );
+  const references = await Promise.all(refs.map(async (x) => ({
+    id: x.id,
+    characterId: x.character_id,
+    filePath: x.file_path,
+    url: await signedUrl(String(x.file_path ?? "")),
+    approved: Boolean(x.approved),
+    isPrimary: Boolean(x.is_primary),
+    notes: x.notes,
+    createdAt: x.created_at,
+  })));
   return {
     id: r.id,
     communityId: r.community_id,
@@ -638,16 +749,11 @@ function mapCharacter(r: Record<string, unknown>) {
     appearance: JSON.parse(String(r.appearance || "{}")),
     personality: r.personality,
     locked: Boolean(r.locked),
+    appearanceStatus: r.appearance_status === "approved" ? "approved" : "placeholder",
+    primaryReferenceId: r.primary_reference_id == null ? null : String(r.primary_reference_id),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
-    references: refs.map((x) => ({
-      id: x.id,
-      characterId: x.character_id,
-      filePath: x.file_path,
-      approved: Boolean(x.approved),
-      notes: x.notes,
-      createdAt: x.created_at,
-    })),
+    references,
   };
 }
 

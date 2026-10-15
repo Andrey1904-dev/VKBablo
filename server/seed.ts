@@ -149,7 +149,9 @@ export function seedCore() {
     );
   }
 
-  if (!setting("app_mode")) setSetting("app_mode", process.env.APP_MODE || "test");
+  // The Node/SQLite backend is a development dry-run only. Live VK publishing
+  // belongs to the guarded Supabase publication worker, never this local server.
+  setSetting("app_mode", "test");
   if (!setting("automation_paused")) setSetting("automation_paused", "0");
   if (!setting("timezone")) setSetting("timezone", "Europe/Moscow");
   if (!setting("prepare_hours_ahead")) setSetting("prepare_hours_ahead", "24");

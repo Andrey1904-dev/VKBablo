@@ -556,7 +556,10 @@ Deno.serve(async (req: Request) => {
       }
 
       case "settings/test-worker": {
-        const result = await triggerWorker("health", true);
+        const result = await triggerWorker("health", true) as Record<string, unknown>;
+        if (result?.ok !== true || result?.queueTouched !== false) {
+          throw new ApiError(502, "Воркер не подтвердил безопасную read-only health-проверку", "worker_health_failed");
+        }
         return json({ ok: true, result }, 200, origin);
       }
 
@@ -657,9 +660,15 @@ function extractToken(req: Request): string {
 
 /** Ручной запуск воркера (использует тот же рабочий секрет, что и Cron). */
 async function triggerWorker(task: string, wait = false): Promise<unknown> {
-  if (!WORKER_SECRET) return { skipped: "WORKER_SECRET не задан" };
+  if (!WORKER_SECRET) {
+    if (wait) throw new ApiError(503, "WORKER_SECRET не настроен; проверка воркера не выполнена", "worker_not_configured");
+    return { dispatched: false, skipped: "WORKER_SECRET не задан" };
+  }
   const base = Deno.env.get("SUPABASE_URL");
-  if (!base) return { skipped: "SUPABASE_URL не задан" };
+  if (!base) {
+    if (wait) throw new ApiError(503, "SUPABASE_URL не настроен; проверка воркера не выполнена", "worker_not_configured");
+    return { dispatched: false, skipped: "SUPABASE_URL не задан" };
+  }
 
   const response = await fetch(`${base}/functions/v1/vk-ai-worker`, {
     method: "POST",
@@ -668,6 +677,15 @@ async function triggerWorker(task: string, wait = false): Promise<unknown> {
     signal: AbortSignal.timeout(wait ? 60_000 : 5_000),
   }).catch(() => null);
 
-  if (!response || !response.ok) return { dispatched: true };
-  return wait ? await response.json().catch(() => ({ dispatched: true })) : { dispatched: true };
+  if (!response) {
+    if (wait) throw new ApiError(502, "Ответ воркера не получен; проверка не подтверждена", "worker_unreachable");
+    return { dispatched: false, error: "Ответ воркера не получен" };
+  }
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    const detail = typeof payload?.error === "string" ? payload.error : `HTTP ${response.status}`;
+    if (wait) throw new ApiError(502, `Воркер отклонил запрос: ${detail}`, "worker_rejected");
+    return { dispatched: false, status: response.status, error: detail };
+  }
+  return wait ? await response.json().catch(() => ({ ok: false, error: "Воркер вернул некорректный JSON" })) : { dispatched: true };
 }

@@ -1,6 +1,6 @@
 import type { Context, Next } from "hono";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
-import { get, run } from "./db.ts";
+import { get, getDb, run, setSetting } from "./db.ts";
 import { deriveSessionToken, hashPassword, HttpError, nowIso, sha256, verifyPassword } from "./lib.ts";
 
 const COOKIE = "vkaim_sid";
@@ -19,17 +19,40 @@ export function userCount(): number {
 
 export function createUser(email: string, password: string, name: string): AuthUser {
   if (password.length < 10) throw new HttpError(400, "Пароль не короче 10 символов");
+  const normalizedEmail = email.trim().toLowerCase();
   const hash = hashPassword(password);
   run(
     "INSERT INTO users (email, password_hash, name, role, created_at) VALUES (?, ?, ?, 'owner', ?)",
-    email.trim().toLowerCase(),
+    normalizedEmail,
     hash,
     name.trim(),
     nowIso(),
   );
-  const u = get<AuthUser>("SELECT id, email, name, role FROM users WHERE email = ?", email.trim().toLowerCase());
+  const u = get<AuthUser>("SELECT id, email, name, role FROM users WHERE email = ?", normalizedEmail);
   if (!u) throw new HttpError(500, "Не удалось создать пользователя");
   return u;
+}
+
+/** Atomically consume the only local bootstrap slot; concurrent setup requests cannot create two owners. */
+export function createFirstOwner(email: string, password: string, name: string): AuthUser {
+  const database = getDb();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    if (userCount() !== 0 || get<{ value: string }>("SELECT value FROM settings WHERE key = 'setup_complete'")?.value === "1") {
+      throw new HttpError(400, "Владелец уже создан");
+    }
+    const owner = createUser(email, password, name);
+    setSetting("setup_complete", "1");
+    database.exec("COMMIT");
+    return owner;
+  } catch (error) {
+    try {
+      database.exec("ROLLBACK");
+    } catch {
+      // Preserve the original error.
+    }
+    throw error;
+  }
 }
 
 export function login(email: string, password: string, c: Context): AuthUser {

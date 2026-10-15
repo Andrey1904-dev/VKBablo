@@ -1,7 +1,11 @@
 import { expect, test } from "@playwright/test";
 
-// Every context is isolated. Only demo owner creation and read-only navigation;
-// no publish, worker, AI generation, VK, Supabase or paid API requests.
+const pagesBackendMode = process.env.PAGES_BACKEND_MODE ?? "demo";
+const hasPublicSupabaseConfig = process.env.PAGES_HAS_SUPABASE === "true";
+const isSupabasePagesBuild = hasPublicSupabaseConfig && ["auto", "supabase"].includes(pagesBackendMode);
+
+// Every context is isolated. The demo smoke may create only a browser-local demo owner;
+// a Supabase-configured deployment is checked read-only and never creates a real account.
 for (const storage of ["available", "denied", "quota-exceeded"] as const) {
   test(`production UI renders with storage ${storage}`, async ({ page, baseURL }, testInfo) => {
     const errors: string[] = [];
@@ -45,23 +49,32 @@ for (const storage of ["available", "denied", "quota-exceeded"] as const) {
         await expect(page.locator('meta[name="vkbablo-build"]')).toHaveAttribute("content", process.env.PAGES_EXPECTED_SHA!, { timeout: 1000 });
       }).toPass({ timeout: 120_000, intervals: [5000, 10000] });
     }
-    await expect(page.getByRole("heading", { name: "Создание владельца", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", {
+      name: isSupabasePagesBuild ? "Первичная настройка владельца" : "Создание владельца",
+      exact: true,
+    })).toBeVisible();
     await expect(page.locator(".login-card")).toHaveCSS("background-color", /rgb/);
     expect(await page.locator(".login-card").evaluate((el) => getComputedStyle(el).borderRadius)).not.toBe("0px");
-    await page.locator('input[type="email"]').fill("pages-smoke@example.invalid");
-    await page.locator('input[type="password"]').fill("demo-only-123456");
-    await page.getByRole("button", { name: "Создать аккаунт", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Обзор", exact: true })).toBeVisible();
-    await expect(page.getByText("Демонстрационное пространство", { exact: false })).toBeVisible();
-    await expect(page.locator(".stats-grid")).toBeVisible();
-    await expect(page.locator(".startup-error")).toHaveCount(0);
-    if (storage === "available") {
-      // A saved demo owner must survive a fresh entry at a nested hash route.
-      await page.goto("./#/communities");
-      await expect(page.getByRole("heading", { name: "Сообщества", exact: true })).toBeVisible();
-      await page.reload();
-      await expect(page.getByRole("heading", { name: "Сообщества", exact: true })).toBeVisible();
+    if (isSupabasePagesBuild) {
+      // Read-only cloud smoke only. Never create an Auth account or call any protected API.
+      await expect(page.getByText("scripts/bootstrap-owner.mjs", { exact: false })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Создать аккаунт", exact: true })).toHaveCount(0);
+    } else {
+      await page.locator('input[type="email"]').fill("pages-smoke@example.invalid");
+      await page.locator('input[type="password"]').fill("demo-only-123456");
+      await page.getByRole("button", { name: "Создать аккаунт", exact: true }).click();
+      await expect(page.getByRole("heading", { name: "Обзор", exact: true })).toBeVisible();
+      await expect(page.getByText("Демонстрационное пространство", { exact: false })).toBeVisible();
+      await expect(page.locator(".stats-grid")).toBeVisible();
+      if (storage === "available") {
+        // A saved demo owner must survive a fresh entry at a nested hash route.
+        await page.goto("./#/communities");
+        await expect(page.getByRole("heading", { name: "Сообщества", exact: true })).toBeVisible();
+        await page.reload();
+        await expect(page.getByRole("heading", { name: "Сообщества", exact: true })).toBeVisible();
+      }
     }
+    await expect(page.locator(".startup-error")).toHaveCount(0);
     const js = assets.filter((asset) => asset.url.includes("/assets/") && asset.url.includes(".js"));
     const css = assets.filter((asset) => asset.url.includes("/assets/") && asset.url.includes(".css"));
     expect(js.length).toBeGreaterThan(0);

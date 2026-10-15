@@ -89,6 +89,10 @@ export interface AiRuntime {
   fetcher: typeof fetch;
   logGeneration(row: GenerationLogRow): Promise<void>;
   uploadImage(bytes: Uint8Array, mime: string, extension: string): Promise<{ path: string }>;
+  /** Atomic, service-role-only spend reservation before an external paid request. */
+  reserveBudget?(estimatedUsd: number): Promise<string>;
+  /** Atomically write the cost ledger and release the reservation. */
+  settleBudget?(reservationId: string, row: GenerationLogRow): Promise<void>;
 }
 
 export class AiCallError extends Error {
@@ -148,7 +152,9 @@ export async function loadAiSettings(): Promise<AiSettings> {
     baseUrl,
     limitUsd,
     spendUsd,
-    paidEnabled: (values.get("ai_paid_calls_enabled") ?? "false").toLowerCase() === "true",
+    // Dry-run must never reach paid AI, even if the key and server flag are present.
+    paidEnabled: values.get("app_mode") === "approval" &&
+      (values.get("ai_paid_calls_enabled") ?? "false").toLowerCase() === "true",
     textPricePer1kTokensUsd,
     imagePriceUsd,
     maxTokens: DEFAULT_MAX_TOKENS,
@@ -283,6 +289,39 @@ const defaultRuntime: AiRuntime = {
   readAiKey,
   fetcher: (...args) => fetch(...args),
   logGeneration,
+  async reserveBudget(estimatedUsd) {
+    const reservationId = crypto.randomUUID();
+    const { error } = await admin().rpc("reserve_ai_budget", {
+      p_reservation_id: reservationId,
+      p_estimate_usd: estimatedUsd,
+    });
+    if (error) {
+      throw new Error(`AI-бюджет не зарезервирован; платный вызов не выполнялся: ${error.message}`);
+    }
+    return reservationId;
+  },
+  async settleBudget(reservationId, row) {
+    const { error } = await admin().rpc("settle_ai_budget", {
+      p_reservation_id: reservationId,
+      p_actual_usd: row.costUsd,
+      p_generation: {
+        communityId: row.communityId ?? null,
+        postId: row.postId ?? null,
+        jobId: row.jobId ?? null,
+        type: row.type,
+        provider: row.provider,
+        model: row.model,
+        prompt: row.prompt,
+        result: row.result,
+        costEstimated: row.costEstimated ?? true,
+        status: row.status,
+        error: row.error ?? null,
+      },
+    });
+    if (error) {
+      throw new Error(`Не удалось зафиксировать AI-расход. Резерв сохранён и продолжает блокировать бюджет: ${error.message}`);
+    }
+  },
   async uploadImage(bytes, mime, extension) {
     return uploadObject({ folder: "generated", bytes, mime, extension });
   },
@@ -315,17 +354,12 @@ function isAiCallError(error: unknown): error is AiCallError | ProviderRequestEr
   return error instanceof AiCallError || error instanceof ProviderRequestError;
 }
 
-async function logFailedCall(runtime: AiRuntime, row: GenerationLogRow, error: unknown): Promise<void> {
-  try {
-    await runtime.logGeneration({
-      ...row,
-      status: "error",
-      result: "",
-      error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
-    });
-  } catch {
-    // The original failure remains the actionable error; never include provider credentials.
+async function persistPaidLog(runtime: AiRuntime, reservationId: string | null, row: GenerationLogRow): Promise<void> {
+  if (reservationId && runtime.settleBudget) {
+    await runtime.settleBudget(reservationId, row);
+    return;
   }
+  await runtime.logGeneration(row);
 }
 
 export async function generateTextWithAi(
@@ -367,6 +401,7 @@ export async function generateTextWithAi(
   const estimatedCost = estimateTextCostUsd(input, settings);
   budgetGuard(settings, estimatedCost);
   const base = normalizedBaseUrl(settings.baseUrl);
+  const reservationId = runtime.reserveBudget ? await runtime.reserveBudget(estimatedCost) : null;
   const logBase: GenerationLogRow = {
     communityId: input.communityId,
     postId: input.postId,
@@ -400,10 +435,10 @@ export async function generateTextWithAi(
     const costEstimated = true; // The configured rate is an estimate, not a provider invoice.
     let logWarning: string | undefined;
     try {
-      await runtime.logGeneration({ ...logBase, result: text, costUsd, costEstimated: true, status: "done" });
+      await persistPaidLog(runtime, reservationId, { ...logBase, result: text, costUsd, costEstimated: true, status: "done" });
     } catch {
-      // A completed provider response must not be retried only because audit logging failed.
-      logWarning = "Ответ AI получен, но запись журнала не удалась; проверьте лимит расходов вручную.";
+      // A reservation stays held if the atomic cost ledger cannot be recorded.
+      logWarning = "Ответ AI получен, но фиксация бюджета не завершена; резерв оставлен занятым.";
     }
     settings.spendUsd += costUsd;
     return {
@@ -418,9 +453,20 @@ export async function generateTextWithAi(
   } catch (error) {
     const message = redactError(error instanceof Error ? error.message : String(error), key);
     const costUsd = isAiCallError(error) ? error.costUsd : estimatedCost;
-    await logFailedCall(runtime, { ...logBase, costUsd }, message);
-    if (error instanceof AiCallError) throw new AiCallError(message, costUsd);
-    throw new AiCallError(`Не удалось выполнить запрос к AI: ${message}`, costUsd);
+    let accountingWarning = "";
+    try {
+      await persistPaidLog(runtime, reservationId, {
+        ...logBase,
+        costUsd,
+        status: "error",
+        result: "",
+        error: message,
+      });
+    } catch {
+      if (reservationId) accountingWarning = " Резерв оставлен активным, так как запись стоимости не подтверждена.";
+    }
+    if (error instanceof AiCallError) throw new AiCallError(`${message}${accountingWarning}`, costUsd);
+    throw new AiCallError(`Не удалось выполнить запрос к AI: ${message}${accountingWarning}`, costUsd);
   }
 }
 
@@ -467,6 +513,7 @@ export async function generateImageWithAi(
   const estimatedCost = estimateImageCostUsd(settings);
   budgetGuard(settings, estimatedCost);
   const base = normalizedBaseUrl(settings.baseUrl);
+  const reservationId = runtime.reserveBudget ? await runtime.reserveBudget(estimatedCost) : null;
   const referenceNote = input.referenceUrls?.length
     ? "Текущий адаптер не передаёт референсы изображений провайдеру; точное сходство не гарантируется."
     : undefined;
@@ -499,10 +546,10 @@ export async function generateImageWithAi(
 
     let logWarning: string | undefined;
     try {
-      await runtime.logGeneration({ ...logBase, result: uploaded.path, costUsd, costEstimated: true, status: "done" });
+      await persistPaidLog(runtime, reservationId, { ...logBase, result: uploaded.path, costUsd, costEstimated: true, status: "done" });
     } catch {
-      // Do not spend again merely because the audit row could not be persisted.
-      logWarning = "Ответ AI получен, но запись журнала не удалась; проверьте лимит расходов вручную.";
+      // Do not spend again merely because the atomic ledger response was lost; the reservation remains held.
+      logWarning = "Ответ AI получен, но фиксация бюджета не завершена; резерв оставлен занятым.";
     }
     settings.spendUsd += costUsd;
     return {
@@ -517,8 +564,19 @@ export async function generateImageWithAi(
   } catch (error) {
     const message = redactError(error instanceof Error ? error.message : String(error), key);
     const costUsd = isAiCallError(error) ? error.costUsd : estimatedCost;
-    await logFailedCall(runtime, { ...logBase, costUsd }, message);
-    if (error instanceof AiCallError) throw new AiCallError(message, costUsd);
-    throw new AiCallError(`Не удалось выполнить запрос изображения: ${message}`, costUsd);
+    let accountingWarning = "";
+    try {
+      await persistPaidLog(runtime, reservationId, {
+        ...logBase,
+        costUsd,
+        status: "error",
+        result: "",
+        error: message,
+      });
+    } catch {
+      if (reservationId) accountingWarning = " Резерв оставлен активным, так как запись стоимости не подтверждена.";
+    }
+    if (error instanceof AiCallError) throw new AiCallError(`${message}${accountingWarning}`, costUsd);
+    throw new AiCallError(`Не удалось выполнить запрос изображения: ${message}${accountingWarning}`, costUsd);
   }
 }

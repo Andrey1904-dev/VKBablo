@@ -32,6 +32,7 @@ export function extFromMime(mime: string): string {
 
 export function assertImage(mime: string, size: number) {
   if (!ALLOWED.has(mime)) throw new Error("Допустимы только PNG, JPEG, WEBP, SVG");
+  if (size <= 0) throw new Error("Файл пуст");
   if (size > MAX_BYTES) throw new Error("Файл больше 12 МБ");
 }
 

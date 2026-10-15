@@ -238,7 +238,12 @@ export default function SettingsPage() {
                   <button className={s.mode === "test" ? "active" : ""} onClick={() => save({ mode: "test" }, "Включён тестовый режим (dry-run)")}>
                     Тестирование
                   </button>
-                  <button className={s.mode === "approval" ? "active" : ""} onClick={() => save({ mode: "approval" }, "Включён режим согласования")}>
+                  <button
+                    className={s.mode === "approval" ? "active" : ""}
+                    disabled={!info.realPublishPossible}
+                    title={!info.realPublishPossible ? "Реальные публикации доступны только в подключённом Supabase backend" : undefined}
+                    onClick={() => save({ mode: "approval" }, "Включён режим согласования")}
+                  >
                     С согласованием
                   </button>
                 </div>
@@ -272,6 +277,8 @@ export default function SettingsPage() {
                 </div>
                 <Toggle
                   on={s.realPublishEnabled}
+                  disabled={!info.realPublishPossible}
+                  title={!info.realPublishPossible ? "Реальные публикации доступны только в подключённом Supabase backend" : undefined}
                   onChange={(v) =>
                     save({ realPublishEnabled: v }, v ? "Реальные публикации разрешены (по-прежнему только после одобрения)" : "Реальные публикации выключены")
                   }

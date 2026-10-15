@@ -340,16 +340,22 @@ export class LocalBackend implements Backend {
     await this.request(`/api/characters/${characterId}/references`, { method: "POST", body: form });
   }
 
-  async approveReference(): Promise<void> {
-    unsupported("Подтверждение референсов");
+  async approveReference(referenceId: string): Promise<void> {
+    await this.request(`/api/characters/references/${encodeURIComponent(referenceId)}/approve`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
   }
 
-  async setPrimaryReference(): Promise<void> {
-    unsupported("Выбор основного референса");
+  async setPrimaryReference(referenceId: string): Promise<void> {
+    await this.request(`/api/characters/references/${encodeURIComponent(referenceId)}/primary`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
   }
 
-  async deleteReference(): Promise<void> {
-    unsupported("Удаление референса");
+  async deleteReference(referenceId: string): Promise<void> {
+    await this.request(`/api/characters/references/${encodeURIComponent(referenceId)}`, { method: "DELETE" });
   }
 
   async analytics(): Promise<AnalyticsPayload> {
@@ -379,7 +385,7 @@ export class LocalBackend implements Backend {
     return {
       mode: (result.mode as "test" | "approval") ?? "test",
       automationPaused: Boolean(result.automationPaused),
-      realPublishEnabled: (result.mode as string) === "approval",
+      realPublishEnabled: false,
       timezone: String(result.timezone ?? "Europe/Moscow"),
       prepareHoursAhead: Number(result.prepareHoursAhead ?? 24),
       aiMonthlyLimitUsd: Number(result.aiMonthlyLimitUsd ?? 20),
@@ -394,6 +400,12 @@ export class LocalBackend implements Backend {
   }
 
   async saveSettings(patch: Record<string, unknown>): Promise<ApplicationSettings> {
+    if (patch.mode === "approval") {
+      throw new Error("Локальный API — тестовый стенд и не поддерживает реальные публикации. Подключите Supabase.");
+    }
+    if (patch.realPublishEnabled === true) {
+      throw new Error("Локальный API не может разрешить реальные публикации VK. Подключите Supabase.");
+    }
     await this.request("/api/settings", { method: "PATCH", body: JSON.stringify(patch) });
     return this.settings();
   }

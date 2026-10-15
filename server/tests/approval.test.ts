@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { openMemoryDb } from "../db.ts";
+import { get, openMemoryDb, run, setSetting } from "../db.ts";
 import { seedCore } from "../seed.ts";
 import { createUser } from "../auth.ts";
 import {
@@ -9,6 +9,7 @@ import {
   generateForSlot,
   getPost,
   scheduleToVk,
+  unscheduleLocalPost,
   updatePost,
 } from "../posts.ts";
 import { moscowSlotIso, addDays, moscowParts, HttpError } from "../lib.ts";
@@ -63,6 +64,49 @@ test("после повторного одобрения dry-run планиро�
   const scheduled = await scheduleToVk(post.id, user.id);
   assert.equal(scheduled.status, "scheduled");
   assert.ok(scheduled.vkPostId?.startsWith("test_"));
+});
+
+test("local dry-run cancellation persists the cancelled state and retains valid human approval", async () => {
+  openMemoryDb();
+  seedCore();
+  const owner = createUser("cancel-local@example.com", "super-secret-pass", "Owner");
+  const post = await generateForSlot({ communityId: "stories", scheduledAt: slotTomorrow("13:30") });
+  const approved = approvePost(post.id, owner.id);
+  const scheduled = await scheduleToVk(post.id, owner.id);
+  assert.equal(scheduled.status, "scheduled");
+  assert.ok(scheduled.vkPostId?.startsWith("test_"));
+
+  const cancelled = unscheduleLocalPost(post.id, owner.id, "regression test");
+  assert.equal(cancelled.status, "approved");
+  assert.equal(cancelled.approvedHash, approved.approvedHash);
+  assert.equal(cancelled.vkPostId, null);
+  assert.equal(get<{ status: string }>("SELECT status FROM publication_jobs WHERE post_id = ?", post.id)?.status, "cancelled");
+});
+
+test("local backend rejects live-publish mode before any VK side effect", async () => {
+  openMemoryDb();
+  seedCore();
+  const owner = createUser("local-live-block@example.com", "super-secret-pass", "Owner");
+  const post = await generateForSlot({ communityId: "life", scheduledAt: slotTomorrow("17:30") });
+  approvePost(post.id, owner.id);
+  setSetting("app_mode", "approval");
+  await assert.rejects(() => scheduleToVk(post.id, owner.id), /локальный.*не выполняет реальные публикации/i);
+  assert.equal(get<{ count: number }>("SELECT COUNT(*) AS count FROM publication_jobs")?.count, 0);
+});
+
+test("queue retry re-runs a generating post left behind by a crashed worker", async () => {
+  openMemoryDb();
+  seedCore();
+  const at = slotTomorrow("13:30");
+  const original = await generateForSlot({ communityId: "stories", scheduledAt: at });
+  run("UPDATE posts SET status = 'generating' WHERE id = ?", original.id);
+
+  const readOnlyRetry = await generateForSlot({ communityId: "stories", scheduledAt: at });
+  assert.equal(readOnlyRetry.status, "generating", "a non-queue duplicate request must not race the active job");
+  const recovered = await generateForSlot({ communityId: "stories", scheduledAt: at, retryInterrupted: true });
+  assert.equal(recovered.id, original.id);
+  assert.equal(recovered.status, "review");
+  assert.ok(recovered.version > original.version);
 });
 
 test("local text/image modes preserve untouched components and invalidate approval", async () => {

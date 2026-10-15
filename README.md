@@ -23,7 +23,8 @@
 Документы проекта:
 
 - [`HANDOFF.md`](HANDOFF.md) — полное состояние проекта: что сделано, что нет, контракты, грабли, план работ
-- [`AUDIT.md`](AUDIT.md) — аудит исходного кода и план миграции на Supabase
+- [`AUDIT_REPORT.md`](AUDIT_REPORT.md) — актуальный аудит, приоритеты, исправления и непроверенные риски
+- [`AUDIT.md`](AUDIT.md) — архивный исходный аудит 2026-10-14
 - [`supabase/README.md`](supabase/README.md) — схема, RLS, RPC, Storage, Cron, проверки после подключения
 - [`CODEX_SETUP.md`](CODEX_SETUP.md) — безопасная пошаговая инструкция локальной и будущей Supabase-настройки
 
@@ -73,8 +74,8 @@ npm test
 ## Режимы
 
 1. **Тестирование** (по умолчанию) — генерация, очередь, согласование, имитация VK.
-2. **С согласованием** — то же + `wall.post` с `publish_date` после одобрения.
-3. Автопубликация без одобрения **не реализована как рабочий режим**.
+2. **С согласованием** — только в облачном Supabase backend при `app_mode=approval`, `real_publish_enabled=true`, валидном VK подключении и одобрении текущего hash.
+3. Local Node/SQLite принудительно остаётся test/dry-run; он не подключает VK и не хранит VK-токены. Автопубликация без одобрения **не реализована как рабочий режим**.
 
 ## Supabase
 
@@ -95,7 +96,9 @@ npm test
 Cloudflare в проекте не используется (ни Workers, ни D1/R2, ни Wrangler).
 
 1. **Фронтенд** — GitHub Actions собирает Vite и публикует `dist` на GitHub Pages
-   (hash-роутинг, `VITE_BASE`, публичные `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`).
+   (hash-роутинг, `VITE_BASE`). Без GitHub Actions variables сборка остаётся demo; для облачного
+   backend задаются только публичные repository Variables `VITE_SUPABASE_URL`,
+   `VITE_SUPABASE_ANON_KEY` и `VITE_BACKEND_MODE=auto`.
 2. **Серверная часть** — Supabase: миграции, RLS, Storage, Auth, Edge Functions и Cron.
 3. **Долгие задачи** (генерация, публикация, статистика) выполняются очередями и воркером,
    а не внутри одного HTTP-запроса: у Edge Functions есть лимит времени выполнения.
@@ -107,7 +110,8 @@ Cloudflare в проекте не используется (ни Workers, ни D
 - Сессия в httpOnly cookie, проверка Origin на мутациях
 - VK-токены шифруются AES-256-GCM, API их не возвращает
 - RLS в Supabase, отдельная таблица `community_secrets` без политик для `authenticated`
-- Storage bucket `media` приватный, просмотр через signed URL
+- Storage bucket `media` приватный, просмотр через signed URL; загрузка создаёт UUID-путь без перезаписи
+- Платные AI-вызовы в dry-run запрещены; в Supabase требуют явного флага и транзакционного reservation/settlement бюджета (миграция `20261015100000`)
 - Service role не заменяет проверку сессии пользователя
 
 ## Структура
