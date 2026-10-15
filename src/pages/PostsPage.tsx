@@ -8,7 +8,7 @@ import { Badge, Button, Empty, PageHead } from "@/components/ui";
 import { CommunityAvatar } from "@/components/layout";
 import { toast } from "@/components/toast";
 import { formatMoscow } from "@/lib/time";
-import { Check, CheckCircle2, ChevronRight, Clock3, Inbox, MoreHorizontal, Pencil, RefreshCw, Search, ShieldCheck, X } from "lucide-react";
+import { Check, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Inbox, MoreHorizontal, Pencil, RefreshCw, Search, ShieldCheck, X } from "lucide-react";
 
 const QUICK: { key: string; label: string; statuses?: string[] }[] = [
   { key: "", label: "Все" },
@@ -22,6 +22,11 @@ export default function PostsPage() {
   const [params, setParams] = useSearchParams();
   const nav = useNavigate();
   const searchRef = useRef<HTMLInputElement>(null);
+
+  const focusRequested = useRef(false);
+  const previewRef = useRef<HTMLElement>(null);
+  const listRef = useRef<HTMLElement>(null);
+  const [mobileListOpen, setMobileListOpen] = useState(true);
 
   const [posts, setPosts] = useState<Post[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -40,6 +45,7 @@ export default function PostsPage() {
     if (q.trim()) filters.q = q.trim();
     const r = await getBackend().posts(filters);
     setPosts(r);
+    setMobileListOpen(true);
     setLoaded(true);
   }
 
@@ -68,6 +74,31 @@ export default function PostsPage() {
     [visible, selectedId],
   );
 
+  const selectedIndex = selected ? visible.findIndex((post) => post.id === selected.id) : -1;
+
+  useEffect(() => {
+    setMobileListOpen(true);
+  }, [quick, statusParam, communityId]);
+
+  function choosePost(id: string) {
+    focusRequested.current = true;
+    setSelectedId(id);
+    setMobileListOpen(false);
+  }
+
+  useEffect(() => {
+    if (!focusRequested.current) return;
+    focusRequested.current = false;
+    if (!window.matchMedia("(max-width: 760px)").matches) return;
+    const target = mobileListOpen
+      ? listRef.current?.querySelector<HTMLButtonElement>('button[aria-current="true"]')
+      : previewRef.current;
+    if (target) {
+      target.focus({ preventScroll: true });
+      target.scrollIntoView({ block: "nearest" });
+    }
+  }, [mobileListOpen, selected?.id]);
+
   async function act(fn: () => Promise<unknown>, okText: string) {
     if (!selected) return;
     setBusy(true);
@@ -83,7 +114,7 @@ export default function PostsPage() {
   }
 
   return (
-    <div className="page enter">
+    <div className="page enter review-page">
       <PageHead
         title="На проверке"
         description="Проверьте контент перед публикацией. Одобрение обязательно для каждого поста."
@@ -113,10 +144,10 @@ export default function PostsPage() {
             placeholder="Найти публикацию…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && load()}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); load(); } }}
           />
         </div>
-        <select className="select-btn" value={communityId} onChange={(e) => setCommunityId(e.target.value)}>
+        <select aria-label="Сообщество" className="select-btn" value={communityId} onChange={(e) => setCommunityId(e.target.value)}>
           <option value="">Все сообщества</option>
           {COMMUNITY_IDS.map((id) => (
             <option key={id} value={id}>
@@ -130,8 +161,8 @@ export default function PostsPage() {
         <div className="surface">
           <Empty
             icon={Inbox}
-            title="Публикаций пока нет"
-            text="Создайте пост вручную или сгенерируйте его в AI-студии — он появится здесь и потребует одобрения."
+            title={posts.length === 0 && !q.trim() && !communityId ? "Публикаций пока нет" : "Нет публикаций по выбранным фильтрам"}
+            text="Измените фильтры или создайте материал в AI-студии. Каждый пост требует ручного одобрения."
             action={
               <Button onClick={() => nav("/studio")}>
                 <ShieldCheck size={16} /> Открыть AI-студию
@@ -140,15 +171,29 @@ export default function PostsPage() {
           />
         </div>
       ) : (
-        <div className="review-grid">
-          <aside className="review-list">
+        <div className={`review-grid ${mobileListOpen ? "is-list-open" : "is-preview-open"}`}>
+          <div className="review-mobile-controls">
+            <Button variant="secondary" disabled={busy} aria-expanded={mobileListOpen} aria-controls="review-list" onClick={() => { focusRequested.current = true; setMobileListOpen(!mobileListOpen); }}>
+              {mobileListOpen ? "К просмотру" : "К списку"} · {visible.length}
+            </Button>
+            {selected && (
+              <div className="review-mobile-navigation" aria-label="Навигация по публикациям">
+                <Button variant="ghost" aria-label="Предыдущая публикация" disabled={busy || selectedIndex <= 0} onClick={() => choosePost(visible[selectedIndex - 1].id)}><ChevronLeft size={18} /></Button>
+                <span role="status">{selectedIndex + 1} из {visible.length}</span>
+                <Button variant="ghost" aria-label="Следующая публикация" disabled={busy || selectedIndex >= visible.length - 1} onClick={() => choosePost(visible[selectedIndex + 1].id)}><ChevronRight size={18} /></Button>
+              </div>
+            )}
+          </div>
+          <aside ref={listRef} id="review-list" className="review-list" aria-label="Публикации очереди">
             {visible.map((p) => {
               const meta = COMMUNITY_META[p.communityId];
               return (
                 <button
                   key={p.id}
-                  className={p.id === selectedId ? "active" : ""}
-                  onClick={() => setSelectedId(p.id)}
+                  className={p.id === selected?.id ? "active" : ""}
+                  aria-current={p.id === selected?.id ? "true" : undefined}
+                  disabled={busy}
+                  onClick={() => choosePost(p.id)}
                 >
                   <CommunityAvatar id={p.communityId} />
                   <span>
@@ -170,7 +215,7 @@ export default function PostsPage() {
           </aside>
 
           {selected ? (
-            <section className="review-preview">
+            <section ref={previewRef} tabIndex={-1} aria-label="Просмотр публикации" className="review-preview">
               <div className="review-preview-head">
                 <div>
                   <Badge tone={STATUS_TONE[selected.status] ?? "neutral"}>{STATUS_LABEL[selected.status] ?? selected.status}</Badge>
@@ -197,7 +242,7 @@ export default function PostsPage() {
                 </p>
                 <p style={{ whiteSpace: "pre-wrap" }}>{selected.text || "Текст ещё не сгенерирован."}</p>
                 {(selected.imageUrl || selected.imagePath) && (
-                  <img src={selected.imageUrl || selected.imagePath!} alt="" />
+                  <img src={selected.imageUrl || selected.imagePath!} alt="Изображение публикации" />
                 )}
                 {selected.errorMessage && (
                   <p style={{ color: "var(--red)", fontSize: 12 }}>{selected.errorMessage}</p>

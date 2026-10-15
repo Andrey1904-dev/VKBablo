@@ -451,6 +451,7 @@ main { margin-left: 252px; min-height: 100vh; transition: margin .2s; display: b
 .history-list .danger { color: var(--red); }
 
 /* ---------- На проверке ---------- */
+.review-mobile-controls { display: none; }
 .review-filters { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .search { height: 35px; width: 260px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); display: flex; align-items: center; padding: 0 10px; gap: 8px; color: var(--muted); flex: 1; min-width: 180px; max-width: 320px; }
 .search input { border: 0; outline: 0; background: transparent; color: var(--text); width: 100%; font-size: 11px; }
@@ -749,4 +750,33 @@ table.data tr:hover td { background: var(--surface2); }
 @media (prefers-reduced-motion: reduce) {
   .enter, .toast, .modal, .modal-backdrop { animation: none; }
   .btn:hover, .community-card:hover, .character:hover, .cal-post:hover { transform: none; }
+}
+
+/* Mobile moderation uses the same cards and controls; desktop stays two-column. */
+@media (max-width: 760px) {
+  .review-page .page-head { flex-wrap: wrap; gap: 12px; }
+  .review-page .page-head .badge { display: inline-flex; }
+  .review-page .review-filters { min-width: 0; }
+  .review-page .review-filters .segmented button { min-height: 44px; }
+  .review-page .review-filters .segmented { max-width: 100%; flex-wrap: wrap; width: auto; }
+  .review-page .review-filters .search { width: 100%; max-width: none; min-width: 0; flex-basis: 100%; }
+  .review-page .review-filters .select-btn { display: block; max-width: 100%; min-height: 44px; }
+  .review-page .review-grid { display: block; min-height: 0; border: 0; background: transparent; }
+  .review-mobile-controls { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .review-mobile-controls > .btn { min-height: 44px; }
+  .review-mobile-navigation { display: flex; align-items: center; gap: 8px; }
+  .review-mobile-navigation .btn { min-width: 44px; min-height: 44px; }
+  .review-mobile-navigation span { font-size: 12px; color: var(--muted); }
+  .review-page .review-list { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); max-height: none; margin-bottom: 12px; }
+  .review-page .review-list > button { min-height: 60px; }
+  .review-page .review-list > button > .avatar { flex: none; display: grid; }
+  .review-page .review-list > button:not(.active) { display: flex; }
+  .review-page .is-preview-open .review-list,
+  .review-page .is-list-open .review-preview { display: none; }
+  .review-page .review-preview { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--surface); }
+  .review-page .review-post { min-width: 0; overflow-wrap: anywhere; }
+  .review-page .review-post > img { height: auto; max-height: 360px; object-fit: contain; }
+  .review-page .review-bar { flex-wrap: wrap; }
+  .review-page .review-bar .btn { min-height: 44px; flex: 1; }
+  .review-page .review-bar .btn-primary { flex-basis: 100%; order: -1; }
 }
