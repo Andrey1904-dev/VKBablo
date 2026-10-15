@@ -9,7 +9,7 @@
 
 Архитектура сохранена: React/TypeScript/Vite → `getBackend()` → Demo/Local/Supabase implementations; production intent — Supabase Postgres/RLS/Auth/Storage/Edge Functions/Cron. DesignVK не переделывался.
 
-Исправлены несколько опасных/неработающих локальных путей, добавлен атомарный бюджет AI и исправлена синхронизация расписания с состоянием паузы. Это **подготовка**, а не доказательство production-ready облака: миграции не применялись к целому disposable PostgreSQL/Supabase проекту. Новую schedule-trigger migration и rollbackable SQL test отдельно выполнили в изолированном PGlite fixture; остальные PL/pgSQL/RLS/Edge runtime и бюджетная concurrency проверка остаются непроверенными. Поэтому paid AI и real VK должны оставаться выключенными до полноценной интеграционной проверки.
+Исправлены несколько опасных/неработающих локальных путей, добавлен атомарный бюджет AI и исправлена синхронизация расписания с состоянием паузы. Это **подготовка**, а не доказательство production-ready облака: миграции не применялись к полному disposable PostgreSQL/Supabase проекту. Обе новые SQL-фикстуры (schedule sync и AI budget) и соответствующие функции отдельно выполнили в PGlite на минимальной локальной схеме; Deno static check обеих Edge Functions прошёл через `npx --yes deno check`. Полные миграции, RLS/Auth/Edge runtime и двухсессионная AI-budget concurrency проверка остаются непроверенными. Поэтому paid AI и real VK должны оставаться выключенными до полноценной интеграционной проверки.
 
 **Подготовка 12 материалов/сутки реализована условно:** planner ставит `full_post` generation jobs для будущих слотов, worker создаёт drafts в `review`. Это не автопубликация; публикация требует отдельного человеческого одобрения актуального хэша. Работа зависит от включённого Cron, Edge secrets, доступности базы и провайдера. Проект не гарантирует 12 готовых или 12 опубликованных материалов при сбое/недоступности интеграции.
 
@@ -41,8 +41,8 @@
 | Проблема | Файлы | Исправление / остаточный риск |
 |---|---|---|
 | **Local backend мог перейти в `approval` и вызвать реальный `wall.post`, хотя `realPublishEnabled` UI фактически не сохранялся/не проверялся.** В локальном коде не было надёжного DB fence до внешнего VK запроса, поэтому параллельные запросы могли пройти `SELECT` до записи publication job. | `server/posts.ts`, `server/vk.ts`, `server/app.ts`, `src/data/local.ts`, `src/pages/SettingsPage.tsx` | Local режим принудительно test-only; прямой API/UI переход в live отклоняется; schedule блокирует `approval` до VK adapter; токены не принимаются в локальном mock flow. Добавлен regression test, что live mode блокируется до любого VK job/side effect. Supabase остаётся единственным live intent path и не проверен на базе. |
-| **Кнопка/route worker health запускала очередь:** `health` не имел отдельной ветки в worker и попадал в `default: tick`, что могло планировать/генерировать материалы при проверке интеграции. | `supabase/functions/vk-ai-worker/index.ts`, `supabase/functions/vk-ai-api/index.ts` | Health теперь делает только DB read и возвращает `queueTouched:false`; неизвестные task отклоняются. API не считает `dispatched`/успехом отсутствие ответа/ошибку worker. Добавлен regression test allowlist. Deno/Edge execution не доступен здесь. |
-| **AI monthly budget был только check-then-act:** два worker могли увидеть одну и ту же сумму и одновременно пройти лимит. | новая `supabase/migrations/20261015100000_ai_budget_reservations.sql`; `supabase/functions/_shared/ai.ts`; `server/ai.ts`; `migrations/0003_safety_reliability.sql` | Реализован месячный lock row (`FOR UPDATE`), резерв до каждого paid request, атомарный settlement с `ai_generations`, idempotent settlement. В SQLite добавлены транзакционные резерв/settle. Dry-run дополнительно заблокирован в Edge RPC через `app_mode=test` и server flag. Локальные regression tests проходят. **PostgreSQL миграция/двухсессионный тест не запускались — платные вызовы не включать.** Оценка тарифа может отличаться от фактического provider invoice; в таком случае расход способен превысить оценку. Потерянный ответ оставляет резерв активным до операторской сверки. |
+| **Кнопка/route worker health запускала очередь:** `health` не имел отдельной ветки в worker и попадал в `default: tick`, что могло планировать/генерировать материалы при проверке интеграции. | `supabase/functions/vk-ai-worker/index.ts`, `supabase/functions/vk-ai-api/index.ts` | Health теперь делает только DB read и возвращает `queueTouched:false`; неизвестные task отклоняются. API не считает `dispatched`/успехом отсутствие ответа/ошибку worker. Добавлен regression test allowlist. `deno check` обоих entry points — PASS через `npx --yes deno check`; Supabase Edge runtime всё ещё не проверен. |
+| **AI monthly budget был только check-then-act:** два worker могли увидеть одну и ту же сумму и одновременно пройти лимит. | новая `supabase/migrations/20261015100000_ai_budget_reservations.sql`; `supabase/functions/_shared/ai.ts`; `server/ai.ts`; `migrations/0003_safety_reliability.sql` | Реализован месячный lock row (`FOR UPDATE`), резерв до каждого paid request, атомарный settlement с `ai_generations`, idempotent settlement. В SQLite добавлены транзакционные резерв/settle. Dry-run дополнительно заблокирован в Edge RPC через `app_mode=test` и server flag. Локальные regression tests и `supabase/tests/ai_budget.sql` на минимальной PGlite-схеме проходят. **Полные миграции и двухсессионный тест на PostgreSQL не запускались — платные вызовы не включать.** Оценка тарифа может отличаться от фактического provider invoice; в таком случае расход способен превысить оценку. Потерянный ответ оставляет резерв активным до операторской сверки. |
 | **Одновременный first-owner setup в локальном API мог создать несколько owner аккаунтов:** проверка `userCount()` была вне транзакции. | `server/auth.ts`, `server/app.ts`, `server/db.ts` | `createFirstOwner()` выполняет повторную проверку и запись под `BEGIN IMMEDIATE`, setup latch записывается в той же транзакции. Добавлен тест повторного создания. Supabase bootstrap в предыдущем этапе уже имел DB latch, но реальная Auth транзакция не проверена. |
 
 ### P1 — важные
@@ -60,7 +60,7 @@
 
 ### P1 — не устранено / требуется облачная проверка
 
-1. Все Supabase migrations, Auth triggers, RLS, Storage policies, RPC lock order, Cron и Edge Functions — **не применялись к полному PostgreSQL/Supabase проекту**. Изолированный PGlite fixture исполнил только schedule-sync trigger и rollbackable regression SQL; он не проверяет grants/RLS, всю схему, PostgREST роли, миграционный порядок, Cron или production runtime. Внешний grammar parser сам по себе не проверяет PL/pgSQL, права/транзакции.
+1. Все Supabase migrations, Auth triggers, RLS, Storage policies, RPC lock order, Cron и Edge Functions — **не применялись к полному PostgreSQL/Supabase проекту**. Изолированные PGlite fixtures исполнили только две новые AI-budget/schedule migration функции и соответствующие rollbackable SQL tests на минимальных схемах; это не проверяет grants/RLS, всю схему, PostgREST роли, миграционный порядок, Cron или production runtime. Внешний grammar parser сам по себе не проверяет object dependencies и production privileges.
 2. Новый AI budget SQL содержит сервисные reserve/settle/release RPC, но `npm run test:ai-budget-concurrency` не запускался: нет `DATABASE_URL`, psql и disposable Postgres. До этого paid AI оставить выключенным. Параметр `actual_usd` — оценка; нужен контроль фактического счёта/тарифа и осторожное ручное восстановление резервов после unknown outcome.
 3. Image publisher в Supabase принимает только PNG/JPEG через `fetchRequiredPublicationImage`; upload helper допускает также WEBP/SVG/GIF. Неподдерживаемый формат будет заблокирован до `wall.post`, но интерфейс может позволить загрузить и одобрить его. Конвертер в растр не реализован; для live workflow следует загружать PNG/JPEG. Тестовые SVG illustrations не являются VK-ready изображением.
 4. Сходство персонажей не обеспечивается: provider adapter не отправляет references. Настройка/выбор references сохраняется, но не меняет payload текущего OpenAI-compatible image API.
@@ -74,7 +74,7 @@
 - Полный `npm audit` показывает **7 dev-only уязвимостей** в цепочке Tailwind 3.4.19 (`braces`, `chokidar`, `fast-glob`, `micromatch`, `postcss-nested`, `postcss-selector-parser`, `tailwindcss`). `npm audit fix` без major update ничего не исправил; принудительный Tailwind 4 не применялся, чтобы не ломать текущую конфигурацию. `npm audit --omit=dev` — 0 vulnerabilities.
 - Локальная Node auth предназначена для dev: login rate-limit in-memory и IP берётся из forwarded header; не экспонировать этот server как production. Production Auth — Supabase Auth.
 - Browser tests не прошли запуск: отсутствуют Playwright Chromium/WebKit binaries. Поэтому iPhone 13 visual/overflow test не выполнен, CSS проверен только сборкой/кодом.
-- Deno отсутствует; `deno check` для обеих функций не запускался.
+- `deno check` для двух Edge Function entry points — PASS через `npx --yes deno check`; Edge runtime и Supabase deployment не запускались.
 
 ## 4. Проверки, выполненные в этой рабочей копии
 
@@ -88,14 +88,14 @@
 | `node scripts/sync-shared.mjs --check` | PASS, **16 файлов** | shared и Deno-core копия совпадают; не Deno runtime test |
 | `node --check scripts/bootstrap-owner.mjs` | PASS | только Node syntax |
 | `node --check scripts/test-ai-budget-concurrency.mjs` | PASS | только Node syntax; PostgreSQL не подключён |
-| `git diff --check` | PASS на момент запуска | whitespace/errors; повторить перед commit |
+| `git diff --check` | PASS | whitespace/conflict checks; повторено после текущих правок перед commit |
 | `npm audit --omit=dev --audit-level=moderate` | PASS, 0 | production dependencies только |
 | `npm audit` | WARN, 7 dev dependencies | Tailwind 3.x major upgrade нужен для полного исправления |
 | pglast parse SQL migrations/tests | PASS, все **14 SQL файлов** (11 migrations + 3 fixtures) | outer SQL grammar only; не заменяет runtime проверки |
-| Isolated PGlite schedule regression | PASS | миграция `20261015101000` + `supabase/tests/schedule_sync.sql` на минимальной локальной схеме; не полный Supabase/PostgreSQL migration run |
+| Isolated PGlite SQL regressions | PASS | обе новые миграции и `supabase/tests/{ai_budget,schedule_sync}.sql` на минимальных локальных схемах; не полный Supabase/PostgreSQL migration run |
+| `npx --yes deno check supabase/functions/vk-ai-api/index.ts supabase/functions/vk-ai-worker/index.ts` | PASS | статическая проверка двух Edge entry points; не Supabase runtime |
 | `npm run test:browser` | NOT RUNNABLE, 15 tests blocked | нет Playwright Chromium/WebKit binaries; assertions не стартовали |
-| Deno check | NOT RUN | executable отсутствует |
-| PostgreSQL integration/concurrency | NOT RUN | нет psql/DB/DATABASE_URL; только SQL fixtures/script подготовлены |
+| PostgreSQL full migration/concurrency | NOT RUN | нет psql/DB/DATABASE_URL; PGlite не заменяет две независимые реальных PostgreSQL-сессии |
 | Supabase/Auth/RLS/Storage/Cron/Edge/Pages | NOT RUN | проект и secrets не подключены |
 | VK/paid AI | NOT CALLED | нет реальных вызовов по ограничениям |
 

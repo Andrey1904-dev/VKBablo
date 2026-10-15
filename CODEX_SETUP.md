@@ -263,4 +263,10 @@ node --check scripts/bootstrap-owner.mjs
 npm run test:ai-budget-concurrency   # только disposable PostgreSQL, с явным confirmation
 ```
 
-При изменении Edge Functions запустить `deno check` для обеих функций, если Deno доступен. Для SQL: применить миграцию к отдельному PostgreSQL/Supabase проекту и выполнить integration SQL; `pglast`/другой parser — только syntax screening. В финальном отчёте явно перечислить непроведённые PostgreSQL, Edge runtime, browser/WebKit и внешние API проверки.
+Проверить Edge types статически:
+
+```bash
+npx --yes deno check supabase/functions/vk-ai-api/index.ts supabase/functions/vk-ai-worker/index.ts
+```
+
+Ожидаемый результат: обе функции проходят Deno type check; это **не** запуск в Supabase Edge runtime. Для SQL: применить миграции к отдельному PostgreSQL/Supabase проекту и выполнить integration SQL; `pglast`/PGlite ограниченные fixtures не заменяют проверку всей схемы, grants/RLS и конкурентных транзакций. В финальном отчёте явно перечислить непроведённые PostgreSQL, Edge runtime, browser/WebKit и внешние API проверки.
