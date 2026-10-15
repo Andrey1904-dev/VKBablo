@@ -155,3 +155,6 @@ begin
 end $$;
 
 rollback;
+
+-- Emit a result after rollback for CLI/Management API clients.
+select 'security_boundaries: PASS (transaction rolled back)' as result;

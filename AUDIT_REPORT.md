@@ -1,87 +1,82 @@
-# VKBablo — follow-up audit: storage integrity, authorization and VK media
+# VKBablo — фактическая проверка тестового Supabase
 
-**Дата:** 15 октября 2026
-**Рабочая ветка:** `arena/edb22162-vkbablo` (сессионная ветка; не переключать)
-**Основа:** `8a66a0e6031e4cf62ba98f924b7d34b220e8b12e`, merge commit PR #11. PR #11 уже `MERGED`; follow-up опубликован отдельным [PR #12](https://github.com/Andrey1904-dev/VKBablo/pull/12), состояние `OPEN`, GitHub `test` checks — PASS. Изменения кода и документов сохранены раздельными коммитами в закреплённой ветке. PR не объединён.
-**Ограничения:** реальные Supabase/VK/AI сервисы не подключались; платные AI-запросы и публикации VK не выполнялись; дизайн не менялся.
+Дата: 15 октября 2026. Целевой ref: `rxzpgxejhfubenllfrpb` (VKBablo, Free).
+Проверенная основа main: `9bdb5a07e1665b684fc27e142f0073ba54f8ec53`.
+Исправления подготовлены для отдельного PR из `codex/verified-supabase-backend` в main. Commit/push/PR разрешены пользователем после завершения runtime проверки; merge и публикация сайта не разрешены.
 
-## 1. Исправления независимого аудита
+## Версия и исторические инструкции
 
-### 1.1 Одобрение теперь привязано к точным байтам Storage-объекта
+GitHub API независимо подтвердил PR #11 MERGED (merge `8a66a0e`, 03:41:09 UTC) и PR #12 MERGED (merge `9bdb5a0`, 05:30:54 UTC). Оба merge присутствуют в истории main; byte-integrity изменения `806d09e` входят в проверенный checkout. AGENTS.md в репозитории отсутствует. Прочитаны CODEX_SETUP, HANDOFF, прежний AUDIT_REPORT, .env.example, supabase/README и оба workflows. Прежние требования работать только в Arena-ветке и сведения об открытом PR #12 исторические и больше не применяются. Дизайн, React/Vite/Supabase архитектура и правила четырёх сообществ сохранены.
 
-**Ранее:** approval хэшировал `image_path`, но не байты. Объект по тому же пути можно было заменить и сохранить прежнее одобрение.
+## Найдено и исправлено
 
-**Изменено:**
+1. Fresh install не находил unqualified pgcrypto `digest()` при CLI apply. Добавлены временные compatibility wrappers; итоговая миграция квалифицирует вызовы через `extensions` и удаляет wrappers.
+2. Исторический core создаёт SQL helpers до таблиц, которые они читают. Обычный db push останавливался на отсутствующем profiles. Core и RPC фактически исполнены через Management SQL с `check_function_bodies=off`, исходные файлы сохранены, история записана в тех же транзакциях. Добавлен guarded installer `scripts/apply-test-migrations.mjs` для воспроизводимого продолжения установки. Отдельная ранняя migration с SET сама по себе недостаточна для CLI, который сбрасывает session settings между файлами.
+3. Planner использовал необъявленный `r2`; job не связывался с созданным slot post, поэтому результат генерации мог не сохраниться в пост. Новая migration объявляет переменные и атомарно связывает job с post_id.
+4. `missed_slots` складывал timestamp/text/time несовместимыми операторами. Исправлены приведения day к date, slot к time.
+5. `posts_due_for_publication` и `posts_due_for_stats` имели SQL body, объявленный как PL/pgSQL. Исправлено новой migration; db lint после исправления не находит ошибок.
+6. Service-role PostgREST UPDATE поста падал в trigger: permission denied for content_hash. Даны узкие EXECUTE grants на canonical hash helpers сервисной роли.
+7. Worker обращался к owner-only get_settings без пользовательского JWT. Теперь читает серверные publish settings; ошибка их чтения останавливает обработку.
+8. API health проверял queueTouched на внешнем envelope вместо вложенного result. Исправлен разбор; owner API health реально вернул 200 и queueTouched=false.
+9. `[auth.email].enable_signup=false` в remote config выключал email provider вместе со входом. Email provider включён, глобальный `[auth].enable_signup=false` сохранён. Вход проверен, публичный signup реально отклонён с signup_disabled.
+10. SQL fixtures теперь возвращают явный результат после rollback либо cleanup; budget fixture задаёт service-role claim. Добавлены fixtures настоящих SQL-ролей и approval/unknown lifecycle.
+11. Playwright мог повторно использовать dev server на том же порту вместо production artifact. reuseExistingServer выключен. Один повторный прогон был остановлен из-за этой коллизии; исправленный прогон выполнен отдельно.
 
-- Добавлен `sha256` в `media_assets`, `approved_image_sha256` в `posts` и `image_sha256` в `publication_jobs`.
-- `approve_post` принимает только зарегистрированный объект из приватного bucket `media`, проверяет MIME/расширение PNG/JPEG и фиксирует SHA-256 байтовой версии в approval.
-- `schedule_post` копирует тот же digest в job; DB dispatch trigger сверяет digest поста, задания и неизменяемых media-метаданных.
-- Edge uploader вычисляет SHA-256 с фактических байтов, сохраняет его в `media_assets` и использует `upsert=false`. Локальный Supabase uploader также использует `upsert=false`.
-- Удалена Storage policy `media_owner_update`: authenticated owner/editor не могут делать Storage UPDATE/upsert по уже существующему пути. `media_assets` identity fields защищены immutable trigger и уникальностью `(bucket,path)`.
-- Перед VK photo upload publisher проверяет фактические байты скачанного объекта, сигнатуру/MIME, расширение и SHA-256 относительно approval/job. Несовпадение останавливает обработку до `photos.saveWallPhoto`/`wall.post`.
-- Forward migration переводит прежние `approved`/`scheduled` посты в `review`: старые approvals не содержат доказуемого byte digest и не переносятся автоматически. После миграции потребуется новая загрузка PNG/JPEG и повторное одобрение.
-- `server/tests/publication-safety.test.ts` проверяет, что изменённые байты при прежнем пути/MIME/SHA не проходят; `supabase/tests/security_boundaries.sql` проверяет immutable metadata и DB dispatch fence. SQL fixture ещё не запускалась на PostgreSQL.
+## Фактически применённые миграции
 
-### 1.2 Owner/editor разделены на Edge, RPC и RLS слоях
+Всего 19 записей в `supabase_migrations.schema_migrations`, только в `rxzpgxejhfubenllfrpb`:
 
-- `app.is_owner()` теперь означает только роль `owner`; `app.is_editor()` — `owner` или `editor`. Добавлены `assert_owner` и `assert_editor`.
-- Операционные reads и редакционные действия используют роль editor; интеграционные статусы, `application_settings`, аудит, пользовательские профили других людей, security settings, API keys, owner-only publication controls, настройки сообществ и mutations персонажей оставлены owner-only либо service-role-only.
-- `get_settings()` проверяет owner. Прямой RPC `month_spend_usd()` отозван у `authenticated`; spend выдаётся только в owner-guarded ответах.
-- Dashboard остаётся доступным editor, но скрывает настройки, интеграции и расходы.
-- Профиль можно читать самому; список профилей — только владельцу. Роль нельзя изменить из browser profile update: role change разрешён только доверенному server-role пути. Отдельного UI/API для управления пользователями в проекте пока нет.
-- `shared/authorization.ts` содержит явный owner-only и editor allowlist. Для editor неизвестный/новый Edge route закрыт по умолчанию; unit test сверяет классификацию со всеми `switch`-case в `vk-ai-api/index.ts`.
-- Добавлена forward migration, чтобы уже установленная база получила новое разделение. SQL regression fixture проверяет owner/editor helpers, отказ editor от settings и role-change path; фактическое выполнение ожидает disposable Supabase/PostgreSQL.
+- Новые prerequisite: `20261014115900_pgcrypto_compatibility`, `20261014115930_deferred_function_validation`.
+- Все исходные 13: `20261014120000_core_schema`, `20261014120100_rls_policies`, `20261014120200_rpc_functions`, `20261014120300_seed`, `20261014120400_cron`, `20261014120500_vk_publication_safety`, `20261014120600_ai_generation_safety`, `20261014120700_generation_mode_safety`, `20261014120800_owner_bootstrap_safety`, `20261015100000_ai_budget_reservations`, `20261015101000_schedule_sync_safety`, `20261015102000_media_approval_integrity`, `20261015103000_owner_editor_boundaries`.
+- Новые forward fixes: `20261015104000_runtime_function_resolution`, `20261015105000_queue_query_languages`, `20261015106000_planner_post_binding`, `20261015111000_worker_hash_permissions`.
 
-### 1.3 Для публикаций принимаются только форматы VK pipeline
+Перед первой записью подтверждены project ref и пустое состояние: public tables=0, auth.users=0, storage.objects=0, storage.buckets=0. Неожиданных исходных данных не было. Core/RPC применены Management SQL, остальные — CLI db push. Исходные миграции не переписаны. Ошибочные попытки core/RPC откатывались; наличие migration history сверено после успешного исполнения.
 
-- Сигнатура файла сверяется с заявленным MIME; MIME, имя файла и расширение сами по себе не считаются доказательством формата.
-- Папка `posts` в локальном/Edge uploader ограничена PNG и JPEG. UI Post Detail предлагает эти форматы. Publisher повторно проверяет MIME, signature и `.png/.jpg/.jpeg` extension.
-- WEBP/GIF/SVG по-прежнему доступны только в generic media/reference workflow там, где это нужно; они не могут быть одобрены как VK wall photo. Конвертации нет.
-- Добавлены unit tests на spoofed MIME, mismatching signature, неподдерживаемые форматы и расширения.
+## Реально выполненные проверки
 
-### 1.4 Worker health и Cron — разные доказательства
+| Проверка | Результат и граница доказательства |
+|---|---|
+| npm ci | PASS, 225 пакетов; lockfile не менялся |
+| Typecheck | PASS, frontend + server |
+| Unit tests | PASS, 49/49; локальные adapters/mocks |
+| build | PASS, обычная сборка с публичным cloud config |
+| build:pages | PASS, demo artifact для smoke и Supabase artifact отдельно |
+| shared sync | PASS, 18 файлов |
+| Deno check | PASS, оба Edge entry points |
+| db lint --linked --level error | PASS, ошибок нет; unused variable warnings при warning level остаются |
+| hash.sql, ai_budget.sql, schedule_sync.sql, security_boundaries.sql | PASS в живом целевом Supabase; hash.sql удаляет свои fixtures, остальные выполняют ROLLBACK |
+| rls_sessions.sql | PASS: SET ROLE anon/authenticated + JWT claims viewer/editor/owner; все изменения откатились |
+| runtime_integrity.sql | PASS: reset approval/digest, отказ approval без digest, unknown dispatch quarantine; rollback-only |
+| Playwright production smoke | PASS, 15/15: desktop Chromium, mobile Chromium, iPhone WebKit |
+| Cloud frontend smoke | PASS: desktop Chromium + iPhone WebKit, настоящий Auth login и 8 страниц; PNG upload в desktop; обработка контролируемой 503 ошибки |
+| npm audit --omit=dev | 0 advisories |
+| Полный npm audit | 7 advisories (2 moderate, 5 high), build dependency chain Tailwind |
 
-- `task=health` читает доступность `application_settings`, не вызывает planner/generation/queue claim и возвращает `queueTouched:false`.
-- Это **не полностью read-only запрос**: после health worker best-effort пытается записать `worker_run` в `audit_logs`; ошибка audit insert не отменяет ответ. Вызов требует корректного `WORKER_SECRET`; owner-only API endpoint проверяет тот же контракт.
-- `cron.job` доказывает регистрацию расписания. `cron.job_run_details` доказывает запуск SQL-команды Cron, но не подтверждает, что асинхронный `pg_net` HTTP request дошёл и worker завершился.
-- Для подтверждения цепочки сверять `audit_logs` (`cron_dispatch`, `worker_run`, `cron_skip`) и `pg_net` response для `requestId`, если таблица ответа доступна. В этой среде Cron не вызывался и фактический запуск не проверен.
+Browser production smoke проверяет изолированный demo artifact. Cloud frontend smoke отдельно обращался к реальному test Supabase; эти результаты не подменяют друг друга. Сборки предупреждают о main chunk около 730 kB.
 
-## 2. Файлы и миграции
+## Supabase runtime evidence
 
-- `shared/image-format.ts`, `shared/hash.ts`, `shared/publication-safety.ts`, `shared/authorization.ts` — общие policy/helpers.
-- `supabase/functions/_shared/core/*` — синхронизированная Edge-копия; `npm run check:shared` проверяет drift.
-- `supabase/functions/_shared/storage.ts`, `_shared/publish.ts`, `vk-ai-api/index.ts` — Edge upload, публикация и route authorization.
-- `server/storage.ts`, `server/app.ts`, `src/pages/PostDetailPage.tsx` — локальный upload policy и file picker.
-- `20261014120000_core_schema.sql`, `20261014120100_rls_policies.sql`, `20261014120200_rpc_functions.sql` обновлены для fresh install.
-- Новые forward migrations: `20261015102000_media_approval_integrity.sql`, `20261015103000_owner_editor_boundaries.sql`.
-- Новые проверки: `server/tests/{authorization,image-format}.test.ts`, обновлён `server/tests/{hash,local-routes,publication-safety}.test.ts`; добавлен `supabase/tests/security_boundaries.sql`; обновлён `supabase/tests/hash.sql`.
-- Документы: `CODEX_SETUP.md`, `HANDOFF.md`, `supabase/README.md`, `.env.example` должны соответствовать этому состоянию.
+- `vk-ai-api` и `vk-ai-worker`: ACTIVE, deployment version 3; verify_jwt=false компенсируется собственными обязательными проверками JWT/role и worker secret. API без JWT — 401; worker с неверным secret — 401.
+- Создан ровно один owner `andrey1904dev@icloud.com` через штатный bootstrap CLI по дополнительному разрешению пользователя. Пароль случайный, только в ignored локальном файле `.verification/owner.json`, права 600. Одноразовый OWNER_SETUP_SECRET удалён из Edge secrets. Публичная регистрация закрыта, email/password login работает.
+- Серверная матрица проверена с настоящим JWT: viewer отвергнут, editor получает health/auth, но не integrations/worker controls; owner допущен. Профиль временно менялся доверенным серверным SQL и обязательно восстановлен. Дополнительно SQL роли подтверждают RLS, запрет чтения community_secrets, запрет role promotion и owner-only RPC. Администраторские проверки не выдаются за RLS proof.
+- У всех public tables включён RLS. Private bucket media: public=false, 12 MiB. Публичное чтение PNG отвергнуто, signed/authenticated download работает. Storage overwrite одобренного объекта owner JWT отвергнут с 403.
+- SHA-256 скачанных PNG bytes совпал с approved_image_sha256: `6b1048f8a6d40bac0b2954c18fefa40c4ea7a96120fc2e54b7317c0e43c2bbec`. Код проверяет bytes перед VK upload и DB dispatch fence; SQL fixture отвергает mismatch. Реальные VK endpoints не вызывались.
+- Explicit POST `{"task":"health"}` вернул database=reachable, queueTouched=false. Сравнение полных снимков обеих очередей до/после health не обнаружило изменений; best-effort audit запись допустима.
+- Явная фикстура `post_25cda6f5528215caf6`: generation → review → PNG upload → отдельное явное тестовое approval → schedule → dry-run worker (processed=1, real=0, simulated=1) → cancellation. Job `484b39f8-df0b-4ada-bea1-d3d49a8106ab` получил `test_stories_1792129775`. После отмены пост больше не scheduled, remote id очищен; job остаётся done как история выполненной симуляции. После последующей browser PNG upload approval/digest сброшены, финальный статус review. Другие материалы не одобрялись.
+- Конкурентный бюджет: два независимых Management API SQL запроса, каждый reserve=0.1 при лимите 0.15, ровно один accepted и один budget_denied. Внешних AI/VK вызовов нет. Во время теста worker был на паузе; настройки восстановлены. Прерванные CLI-adapter попытки оставляли только тестовые резервы: их UUID отдельно сверены и освобождены. Финально active reservations=0, reservedUsd=0, paidCost=0. Оригинальный psql concurrency script изучен, но не запускался из-за отсутствующего psql; выполнен его эквивалент через независимые SQL requests.
+- Recovery: generation job `f6b6df70-87b6-4e97-b5f1-04f2829e6af4` реально захвачен, lease состарен на 20 минут, requeue RPC вызван, job повторно захвачен и завершён done с attempts=2. Дубликатов активных community/time slots нет. SQL fixture отдельно подтверждает unknown fence без автоматического повтора.
+- Vault настроен: vk_ai_worker_url, vk_ai_worker_secret. Шесть штатных cron jobs активны. Реальный штатный tick 05:55 UTC (10:55 Asia/Yekaterinburg) имеет cron status=succeeded, pg_net request_id=6, HTTP 200, worker generation claimed=2/done=2/errors=[]. В БД соответствующие jobs имеют done и timestamps 05:55. Следующий проверочный tick request_id=8 в 05:56 также claimed=2/done=2. Есть worker_run source=pg_cron. Временное минутное расписание удалено; штатные расписания сохранены.
 
-## 3. Проверки этой рабочей копии
+## Финальные предохранители и ограничения
 
-| Проверка | Результат | Ограничение |
-|---|---|---|
-| `npm ci` | PASS | Установлено 226 пакетов; npm сообщил о 7 advisories (2 moderate, 5 high). Полный dependency remediation не входил в эту задачу. |
-| `npm test` | PASS, **49/49** | Только локальные unit tests/mocks; VK/AI HTTP не вызывались. |
-| `npm run typecheck` | PASS | Frontend и local Node/server TypeScript; не Supabase Edge runtime. |
-| `npm run build` | PASS | Vite; основной chunk **730.14 kB**, предупреждение >500 kB. |
-| `npm run build:pages` | PASS | Demo Pages build; основной chunk **730.23 kB**, предупреждение >500 kB. |
-| `npm run check:shared` | PASS, **18 файлов** | Shared source и Edge core совпадают; это не Deno runtime. |
-| `npx --yes deno check supabase/functions/vk-ai-api/index.ts supabase/functions/vk-ai-worker/index.ts` | PASS | Edge static type check; не Supabase Edge runtime/deployment. |
-| `pglast` parse | PASS, **17 SQL files** (13 migrations + 4 fixtures) | Проверен внешний SQL grammar, не выполнение PL/pgSQL, grants, RLS или зависимостей в живом Supabase. |
-| `npm run test:browser` | BLOCKED, **15/15** | Playwright Chromium/WebKit binaries отсутствуют; browser assertions не стартовали. |
-| `git diff --check` | PASS | Нет whitespace/conflict-marker ошибок. |
-| GitHub PR #12 checks | PASS, **2/2 `test`** | CI completed; PostgreSQL/Supabase integration не запускалась. |
-| PostgreSQL/Supabase SQL fixtures | NOT RUN | Нет `psql`, Supabase CLI, `DATABASE_URL` и disposable project. |
-| Supabase Auth/RLS/Storage/Cron/Edge deployment | NOT RUN | Внешний сервис не подключался. |
-| VK и paid AI | NOT CALLED | Запрещено текущими ограничениями. |
+`app_mode=test`, `real_publish_enabled=false`, `ai_paid_calls_enabled=false`, `ai_provider=test`, `automation_paused=false`, AI monthly limit=20. Один Auth user/owner. Test Cron остаётся включённым и создаёт только review, без автоматических approvals.
 
-## 4. Что осталось Codex
+Тестовый image adapter выдаёт SVG; это честно обозначенная demo illustration. Для approval/VK требуется ручная загрузка PNG/JPEG. Полный цикл проверен с отдельным PNG fixture; это не доказательство PNG output тестового генератора и не основание обещать 12 готовых материалов в сутки. 24-часовой soak, реальный VK, реальный платный AI и production не проверялись и не вызывались.
 
-1. На отдельной disposable Supabase/PostgreSQL сверить полный порядок миграций; перед apply проверить duplicate `(bucket,path)` в `media_assets`, прежние approvals и in-flight/unknown publication jobs. Не выполнять rollout в production.
-2. Применить миграции и выполнить все четыре SQL fixtures (`hash.sql`, `ai_budget.sql`, `schedule_sync.sql`, `security_boundaries.sql`). Отдельно проверить owner/editor RLS/ACL, блокировку role change из authenticated session и отсутствие Storage UPDATE/upsert policy.
-3. Фактическая проверка Cron/worker всё ещё не проводилась: сверять `cron.job`, `cron.job_run_details`, `cron_dispatch.requestId`, `net._http_response` (`worker_returned_ok`) и best-effort `worker_run`/изменения job records. Не принимать регистрацию расписания за доказательство исполнения.
-4. Playwright 15 browser tests не стартовали из-за отсутствующих Chromium/WebKit binaries; установить браузеры и повторить, если требуется UI smoke. Дизайн не менялся.
-5. Не подключать production сервисы, не задавать реальные VK/AI secrets, не выполнять платные запросы/публикации. Проверки сейчас ограничены моками, статической типизацией и SQL grammar parser.
+Полный npm audit указывает на braces/micromatch/chokidar/fast-glob и postcss-selector-parser/postcss-nested через Tailwind 3. Это build-time обработка шаблонов/селекторов; пользовательские файлы приложения не подаются в Tailwind pipeline. Предлагаемый npm major upgrade Tailwind 4 способен изменить CSS/UI. Blind npm audit fix --force не выполнялся; отдельная контролируемая миграция dependency/toolchain остаётся отдельной работой.
 
-**Итог:** локальные regression tests и сборки проходят, но не заменяют PostgreSQL/Supabase integration. PR #11 уже merged; follow-up должен оставаться отдельным PR из `arena/edb22162-vkbablo` без автоматического merge в `main`.
+GitHub Pages не опубликован, GitHub variables/Source не менялись, на этапе runtime проверки push/merge/force-push не выполнялись, тариф и платные ресурсы не менялись. Локальная frontend конфигурация находится в ignored .env.local и содержит только предоставленные публичные значения.
+
+Guarded installer проверен в plan и --apply с пустым pending на существующем проекте; установка с нуля самим новым скриптом отдельно не повторялась, БД ради этого не сбрасывалась. Playwright после устранения коллизии сервера: 15/15 PASS. Final Supabase Pages artifact также собран успешно.
+
+Уточнение UI: worker-health кнопки в текущей Settings нет; health проверен owner API вызовом. Browser backend-error сценарий использует существующую кнопку «Проверить AI» и контролируемый 503 ответ. Test AI probe отдельно подтверждает adapter.id=test и нулевую стоимость.

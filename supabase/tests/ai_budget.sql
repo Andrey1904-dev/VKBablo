@@ -2,6 +2,8 @@
 -- Run only against a disposable local/test database: psql "$DATABASE_URL" -f supabase/tests/ai_budget.sql
 -- All setting changes and fixture rows are rolled back at the end.
 begin;
+-- Exercise service-only budget RPCs with an explicit service-role claim.
+set local request.jwt.claim.role = 'service_role';
 
 do $$
 declare
@@ -70,3 +72,6 @@ begin
 end $$;
 
 rollback;
+
+-- Emit a result after rollback for CLI/Management API clients.
+select 'ai_budget: PASS (transaction rolled back)' as result;

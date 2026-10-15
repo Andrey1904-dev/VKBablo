@@ -561,7 +561,8 @@ Deno.serve(async (req: Request) => {
       }
 
       case "settings/test-worker": {
-        const result = await triggerWorker("health", true) as Record<string, unknown>;
+        const envelope = await triggerWorker("health", true) as Record<string, unknown>;
+        const result = envelope?.result as Record<string, unknown> | undefined;
         if (result?.ok !== true || result?.queueTouched !== false) {
           throw new ApiError(502, "Воркер не подтвердил безопасную проверку состояния без действий с очередью", "worker_health_failed");
         }

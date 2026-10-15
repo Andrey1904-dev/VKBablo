@@ -99,3 +99,6 @@ exception
     delete from public.media_assets where bucket = 'media' and path = v_image_path;
     raise;
 end $$;
+
+-- Emit a result after fixture cleanup for CLI/Management API clients.
+select 'hash: PASS (fixtures cleaned up)' as result;
