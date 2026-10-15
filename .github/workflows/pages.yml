@@ -1,4 +1,4 @@
-name: Deploy demo frontend to GitHub Pages
+name: Deploy frontend to GitHub Pages
 on:
   workflow_dispatch:
   push:
@@ -42,19 +42,17 @@ jobs:
       - run: npx playwright install --with-deps chromium webkit
       - name: Render demo artifact (desktop and iPhone WebKit)
         run: npm run test:browser
-      - name: Reject local API mode on static Pages hosting
-        run: |
-          if [ "$VITE_BACKEND_MODE" = "local" ]; then
-            echo "VITE_BACKEND_MODE=local requires the Node API and cannot be used on GitHub Pages."
-            exit 1
-          fi
+      - name: Validate public test backend configuration
+        run: node scripts/validate-pages-config.mjs
         env:
-          VITE_BACKEND_MODE: ${{ vars.VITE_BACKEND_MODE || 'auto' }}
+          VITE_BACKEND_MODE: ${{ vars.VITE_BACKEND_MODE || 'supabase' }}
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
       # Only public Supabase URL/anon values may enter the client bundle. Empty vars keep demo mode.
       - name: Build Pages artifact for configured backend
         run: npm run build:pages
         env:
-          VITE_BACKEND_MODE: ${{ vars.VITE_BACKEND_MODE || 'auto' }}
+          VITE_BACKEND_MODE: ${{ vars.VITE_BACKEND_MODE || 'supabase' }}
           VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
       - uses: actions/upload-artifact@v4
@@ -99,7 +97,7 @@ jobs:
         env:
           PAGES_URL: ${{ needs.deploy.outputs.page_url }}
           PAGES_EXPECTED_SHA: ${{ github.sha }}
-          PAGES_BACKEND_MODE: ${{ vars.VITE_BACKEND_MODE || 'auto' }}
+          PAGES_BACKEND_MODE: ${{ vars.VITE_BACKEND_MODE || 'supabase' }}
           PAGES_HAS_SUPABASE: ${{ vars.VITE_SUPABASE_URL != '' && vars.VITE_SUPABASE_ANON_KEY != '' }}
       - uses: actions/upload-artifact@v4
         if: always()
