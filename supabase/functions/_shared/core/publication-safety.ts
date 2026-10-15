@@ -5,6 +5,8 @@
  * Keep these helpers free of network and database dependencies so they can be
  * exercised with mocked VK/storage adapters in Node tests and reused by Edge.
  */
+import { sha256BytesHex } from "./hash.ts";
+import { hasVkPublicationImageExtension, isVkPublicationImage } from "./image-format.ts";
 
 export interface ApprovedPublicationSnapshot {
   id: string;
@@ -15,12 +17,14 @@ export interface ApprovedPublicationSnapshot {
   scheduledAt: string;
   contentHash: string | null;
   approvedHash: string | null;
+  approvedImageSha256: string | null;
 }
 
 export interface PublicationJobSnapshot {
   postId: string;
   communityId: string;
   versionHash: string;
+  imageSha256: string | null;
   scheduledAt: string;
   status?: string;
   dispatchStartedAt?: string | null;
@@ -66,6 +70,9 @@ export function hasCurrentApproval(
       post.approvedHash &&
       post.contentHash === post.approvedHash &&
       post.approvedHash === job.versionHash &&
+      post.approvedImageSha256 &&
+      /^[0-9a-f]{64}$/.test(post.approvedImageSha256) &&
+      post.approvedImageSha256 === job.imageSha256 &&
       post.status === "scheduled" &&
       typeof post.text === "string" &&
       post.text.trim().length > 0,
@@ -92,17 +99,24 @@ export async function fetchRequiredPublicationImage(
   path: string | null | undefined,
   createSignedUrl: (path: string) => Promise<string | null>,
   fetcher: typeof fetch = fetch,
-): Promise<{ bytes: Uint8Array; filename: string; mimeType: "image/png" | "image/jpeg" }> {
+  expectedSha256: string | null = null,
+): Promise<{ bytes: Uint8Array; filename: string; mimeType: "image/png" | "image/jpeg"; sha256: string }> {
   if (!path || !path.trim()) {
     throw new PublicationSafetyError(
       "Публикация заблокирована: в одобренной версии отсутствует изображение.",
       "missing_image",
     );
   }
-  if (/\.svg(?:$|[?#])/i.test(path)) {
+  if (!hasVkPublicationImageExtension(path)) {
     throw new PublicationSafetyError(
-      "Публикация заблокирована: VK не принимает SVG. Загрузите PNG или JPEG и одобрите обновлённую версию.",
+      "Публикация заблокирована: VK принимает только PNG или JPEG. Загрузите PNG/JPEG и одобрите версию заново.",
       "unsupported_image",
+    );
+  }
+  if (!expectedSha256 || !/^[0-9a-f]{64}$/.test(expectedSha256)) {
+    throw new PublicationSafetyError(
+      "Публикация заблокирована: у одобренного изображения нет проверенного SHA-256. Загрузите и одобрите изображение заново.",
+      "image_digest_missing",
     );
   }
 
@@ -153,12 +167,38 @@ export async function fetchRequiredPublicationImage(
       "missing_image",
     );
   }
+  if (!isVkPublicationImage(mimeType, bytes)) {
+    throw new PublicationSafetyError(
+      "Публикация заблокирована: содержимое файла не соответствует PNG/JPEG, указанному Storage.",
+      "unsupported_image",
+    );
+  }
+
+  const sha256 = sha256BytesHex(bytes);
+  if (sha256 !== expectedSha256) {
+    throw new PublicationSafetyError(
+      "Публикация заблокирована: байты изображения отличаются от SHA-256, сохранённого при одобрении.",
+      "approved_image_changed",
+    );
+  }
 
   const cleanPath = path.split(/[?#]/, 1)[0];
   const basename = cleanPath.split("/").filter(Boolean).pop() || "post-image";
   const fallbackExtension = mimeType === "image/png" ? ".png" : ".jpg";
   const filename = /\.(png|jpe?g)$/i.test(basename) ? basename : `${basename}${fallbackExtension}`;
-  return { bytes, filename, mimeType };
+  return { bytes, filename, mimeType, sha256 };
+}
+
+/** Call the VK photo uploader only after Storage bytes match the saved approval digest. */
+export async function uploadVerifiedPublicationImage<T>(
+  path: string | null | undefined,
+  expectedSha256: string | null,
+  createSignedUrl: (path: string) => Promise<string | null>,
+  upload: (image: { bytes: Uint8Array; filename: string; mimeType: "image/png" | "image/jpeg"; sha256: string }) => Promise<T>,
+  fetcher: typeof fetch = fetch,
+): Promise<T> {
+  const image = await fetchRequiredPublicationImage(path, createSignedUrl, fetcher, expectedSha256);
+  return upload(image);
 }
 
 export function shouldSkipClaimedPublication(job: {

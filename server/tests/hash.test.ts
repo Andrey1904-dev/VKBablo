@@ -13,6 +13,7 @@ import {
   contentHash,
   contentHashInput,
   normalizeText,
+  sha256BytesHex,
   sha256Hex,
   shortHash,
 } from "../../shared/hash.ts";
@@ -72,6 +73,18 @@ test("sha256Hex побайтово совпадает с node:crypto", () => {
     const expected = createHash("sha256").update(sample, "utf8").digest("hex");
     assert.equal(sha256Hex(sample), expected, JSON.stringify(sample));
   }
+});
+
+test("sha256BytesHex matches node:crypto across padding/block boundaries", () => {
+  for (const length of [0, 1, 55, 56, 63, 64, 65, 127, 128, 129, 1024, 4097]) {
+    const bytes = Uint8Array.from({ length }, (_, index) => (index * 37 + length) & 0xff);
+    const expected = createHash("sha256").update(bytes).digest("hex");
+    assert.equal(sha256BytesHex(bytes), expected, `length=${length}`);
+  }
+
+  const backing = Uint8Array.from({ length: 70 }, (_, index) => index);
+  const view = backing.subarray(3, 68);
+  assert.equal(sha256BytesHex(view), createHash("sha256").update(view).digest("hex"));
 });
 
 test("нормализация текста повторяет btrim(replace(text, E'\\r\\n', E'\\n'))", () => {

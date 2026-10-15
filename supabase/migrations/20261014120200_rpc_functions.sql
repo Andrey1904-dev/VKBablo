@@ -8,7 +8,8 @@
 --   • §15 идемпотентные очереди с блокировками (FOR UPDATE SKIP LOCKED), ретраями и журналом;
 --   • §18 серверная проверка полномочий и аудит критических действий.
 --
--- Пользовательские функции вызываются с JWT владельца (`authenticated`).
+-- Пользовательские функции вызываются с JWT (`authenticated`): редакционные действия
+-- проверяют app.assert_editor(), публикационные/security actions — app.assert_owner().
 -- Служебные функции (очереди, публикация, статистика) — только service role.
 -- =============================================================================
 
@@ -91,7 +92,7 @@ declare
   v_uid uuid;
   v_id text;
 begin
-  v_uid := app.assert_owner();
+  v_uid := app.assert_editor();
   perform app.check_rate_limit(v_uid::text, 'posts', 30, 60);
 
   if not exists (select 1 from public.communities where id = p_community_id) then
@@ -146,7 +147,7 @@ declare
   v_after public.posts;
   v_slot_taken boolean;
 begin
-  v_uid := app.assert_owner();
+  v_uid := app.assert_editor();
   perform app.check_rate_limit(v_uid::text, 'posts', 30, 60);
 
   select * into v_before from public.posts where id = p_post_id for update;
@@ -267,7 +268,7 @@ declare
   v_uid uuid;
   v_post public.posts;
 begin
-  v_uid := app.assert_owner();
+  v_uid := app.assert_editor();
   select * into v_post from public.posts where id = p_post_id for update;
   if v_post is null then
     raise exception 'Публикация не найдена' using errcode = 'P0002';
@@ -306,7 +307,7 @@ declare
   v_post public.posts;
   v_scope text := case when p_scope in ('text', 'image', 'all') then p_scope else 'all' end;
 begin
-  v_uid := app.assert_owner();
+  v_uid := app.assert_editor();
   select * into v_post from public.posts where id = p_post_id for update;
   if v_post is null then
     raise exception 'Публикация не найдена' using errcode = 'P0002';
@@ -475,7 +476,7 @@ declare
   v_kind text := case when p_kind in ('idea','text','image','full_post','regenerate','preview')
                       then p_kind else 'full_post' end;
 begin
-  v_uid := app.assert_owner();
+  v_uid := app.assert_editor();
   perform app.check_rate_limit(v_uid::text, 'generations', 10, 60);
 
   if app.get_bool_setting('automation_paused', false) then
@@ -626,7 +627,7 @@ declare
   v_kind text;
   v_job public.generation_jobs;
 begin
-  v_uid := app.assert_owner();
+  v_uid := app.assert_editor();
   perform app.check_rate_limit(v_uid::text, 'generations', 10, 60);
 
   select * into v_post from public.posts where id = p_post_id for update;
@@ -1128,7 +1129,7 @@ declare
   v_version int;
   v_current jsonb;
 begin
-  v_uid := app.assert_owner();
+  v_uid := app.assert_editor();
 
   select coalesce(max(version), 0) + 1 into v_version
     from public.community_rule_versions where community_id = p_community_id;
@@ -1466,6 +1467,7 @@ security definer
 set search_path = public, app, pg_temp
 as $$
 begin
+  perform app.assert_owner();
   return jsonb_build_object(
     'mode', app.get_setting('app_mode', 'test'),
     'automationPaused', app.get_bool_setting('automation_paused', false),
@@ -1532,7 +1534,7 @@ security definer
 set search_path = public, app, pg_temp
 as $$
 begin
-  perform app.assert_owner();
+  perform app.assert_editor();
   if p_id is null then
     update public.notifications set read = true where read = false;
   else
@@ -1553,7 +1555,7 @@ declare
   v_count int := 0;
   r record;
 begin
-  v_uid := app.assert_owner();
+  v_uid := app.assert_editor();
 
   for r in select * from jsonb_array_elements(coalesce(p_rows, '[]'::jsonb)) loop
     if coalesce(r.value ->> 'postId', '') <> '' then
@@ -1600,7 +1602,11 @@ stable
 security definer
 set search_path = public, app, pg_temp
 as $$
-  select coalesce(jsonb_agg(x order by x.scheduled_at), '[]'::jsonb) from (
+declare
+  v_result jsonb;
+begin
+  perform app.assert_editor();
+  select coalesce(jsonb_agg(x order by x.scheduled_at), '[]'::jsonb) into v_result from (
     select c.id as community_id, ((d.day + s.slot_time) at time zone 'Europe/Moscow') as scheduled_at
       from public.communities c
       join public.schedules sc on sc.community_id = c.id
@@ -1618,6 +1624,8 @@ as $$
             and p.status in ('scheduled','published','approved','review','generating','needs_revision')
        )
   ) x;
+  return v_result;
+end;
 $$;
 
 create or replace function public.analytics_overview()
@@ -1632,7 +1640,7 @@ declare
   v_points jsonb;
   v_best jsonb;
 begin
-  perform app.assert_owner();
+  perform app.assert_editor();
 
   select count(*) into v_published from public.posts where status = 'published';
 
@@ -1691,8 +1699,10 @@ set search_path = public, app, pg_temp
 as $$
 declare
   v_result jsonb;
+  v_is_owner boolean;
 begin
-  perform app.assert_owner();
+  perform app.assert_editor();
+  v_is_owner := app.is_owner();
 
   select jsonb_build_object(
     'counts', coalesce((
@@ -1738,10 +1748,10 @@ begin
       ) j
     ), '[]'::jsonb),
     'missedSlots', jsonb_array_length(public.missed_slots(2)),
-    'spendUsdMonth', public.month_spend_usd(),
+    'spendUsdMonth', case when v_is_owner then public.month_spend_usd() else null end,
     'unreadNotifications', (select count(*) from public.notifications where read = false),
-    'integrations', coalesce((select jsonb_agg(to_jsonb(i)) from public.integration_status i), '[]'::jsonb),
-    'settings', public.get_settings()
+    'integrations', case when v_is_owner then coalesce((select jsonb_agg(to_jsonb(i)) from public.integration_status i), '[]'::jsonb) else '[]'::jsonb end,
+    'settings', case when v_is_owner then public.get_settings() else '{}'::jsonb end
   ) into v_result;
 
   return v_result;
@@ -1774,7 +1784,6 @@ declare
     'public.delete_character_reference(uuid)',
     'public.save_settings(jsonb)',
     'public.get_settings()',
-    'public.month_spend_usd()',
     'public.mark_notifications_read(uuid)',
     'public.import_analytics(jsonb,text)',
     'public.missed_slots(integer)',
@@ -1804,3 +1813,7 @@ begin
     execute format('grant execute on function %s to service_role', fn);
   end loop;
 end $$;
+
+-- Spend details are exposed only through owner-guarded settings/dashboard RPCs.
+revoke all on function public.month_spend_usd() from public, anon, authenticated;
+grant execute on function public.month_spend_usd() to service_role;

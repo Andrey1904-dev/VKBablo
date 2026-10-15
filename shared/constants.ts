@@ -432,7 +432,9 @@ export const DEFAULT_AI_PROMPTS: Omit<AiPromptTemplate, "createdAt">[] = [
 /** Предохранители. Меняются только владельцем через настройки/секреты сервера. */
 export const APP_LIMITS = {
   maxUploadBytes: 12 * 1024 * 1024,
+  /** General media/character references; VK wall photos are restricted below. */
   allowedMimeTypes: ["image/png", "image/jpeg", "image/webp", "image/svg+xml", "image/gif"],
+  vkPublicationMimeTypes: ["image/png", "image/jpeg"],
   maxPostsPerRequest: 200,
   /** Минимум публикаций, чтобы делать выводы в аналитике. */
   postsForAnalyticsConclusions: 12,

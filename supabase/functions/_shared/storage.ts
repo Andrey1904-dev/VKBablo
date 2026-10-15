@@ -6,6 +6,8 @@
  */
 import { admin } from "./db.ts";
 import { ApiError } from "./http.ts";
+import { sha256BytesHex } from "./core/hash.ts";
+import { isVkPublicationImageMime, resolveImageMime } from "./core/image-format.ts";
 
 export const BUCKET = "media";
 export const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
@@ -28,12 +30,24 @@ function extensionFor(mime: string, fallback = "bin"): string {
   return fallback;
 }
 
-export function assertUploadAllowed(mime: string, size: number): void {
-  if (!ALLOWED_MIME.includes(mime)) {
+export function assertUploadAllowed(mime: string, size: number, folder?: MediaFolder, bytes?: Uint8Array): void {
+  const normalizedMime = mime.toLowerCase();
+  if (!ALLOWED_MIME.includes(normalizedMime)) {
     throw new ApiError(400, `Недопустимый тип файла: ${mime}. Разрешены PNG, JPEG, WEBP, SVG, GIF.`, "mime");
   }
+  if (size <= 0) throw new ApiError(400, "Файл пуст", "empty_file");
   if (size > MAX_UPLOAD_BYTES) {
     throw new ApiError(413, "Файл больше 12 МБ", "too_large");
+  }
+  if (folder === "posts" && !isVkPublicationImageMime(normalizedMime)) {
+    throw new ApiError(400, "Для публикации во ВКонтакте загрузите PNG или JPEG. WEBP, SVG и GIF нельзя одобрить для публикации.", "unsupported_publication_image");
+  }
+  if (bytes) {
+    try {
+      if (resolveImageMime(normalizedMime, bytes) !== normalizedMime) throw new Error("MIME mismatch");
+    } catch (error) {
+      throw new ApiError(400, error instanceof Error ? error.message : "Формат изображения не распознан", "image_signature");
+    }
   }
 }
 
@@ -47,11 +61,12 @@ export async function uploadObject(input: {
   characterId?: string | null;
   kind?: "post_image" | "character_reference" | "community_logo" | "generated" | "archive";
   createdBy?: string | null;
-}): Promise<{ path: string; sizeBytes: number }> {
-  assertUploadAllowed(input.mime, input.bytes.byteLength);
+}): Promise<{ path: string; sizeBytes: number; sha256: string }> {
+  assertUploadAllowed(input.mime, input.bytes.byteLength, input.folder, input.bytes);
 
   const ext = input.extension || extensionFor(input.mime);
   const path = `${input.folder}/${crypto.randomUUID()}.${ext}`;
+  const sha256 = sha256BytesHex(input.bytes);
 
   const { error } = await admin().storage.from(BUCKET).upload(path, input.bytes, {
     contentType: input.mime,
@@ -67,11 +82,12 @@ export async function uploadObject(input: {
     path,
     mime_type: input.mime,
     size_bytes: input.bytes.byteLength,
+    sha256,
     kind: input.kind ?? (input.folder === "characters" ? "character_reference" : "post_image"),
     created_by: input.createdBy ?? null,
   });
 
-  return { path, sizeBytes: input.bytes.byteLength };
+  return { path, sizeBytes: input.bytes.byteLength, sha256 };
 }
 
 export async function signedUrl(path: string | null | undefined, expiresIn = 3600): Promise<string | null> {

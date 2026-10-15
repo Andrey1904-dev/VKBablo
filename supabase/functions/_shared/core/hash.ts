@@ -46,15 +46,17 @@ function utf8Bytes(str: string): Uint8Array {
 }
 
 /** SHA-256 → hex. Синхронно, без внешних зависимостей. */
-export function sha256Hex(input: string): string {
-  const msg = utf8Bytes(input);
+/** SHA-256 of raw bytes → lowercase hex. Synchronous and runtime-independent. */
+export function sha256BytesHex(input: Uint8Array): string {
+  const msg = input;
   const bitLen = msg.length * 8;
-  const withPad = new Uint8Array((((msg.length + 9) >> 6) + 1) << 6);
+  const paddedLength = Math.ceil((msg.length + 9) / 64) * 64;
+  const withPad = new Uint8Array(paddedLength);
   withPad.set(msg);
   withPad[msg.length] = 0x80;
   const dv = new DataView(withPad.buffer);
-  dv.setUint32(withPad.length - 4, bitLen >>> 0, false);
   dv.setUint32(withPad.length - 8, Math.floor(bitLen / 0x100000000), false);
+  dv.setUint32(withPad.length - 4, bitLen >>> 0, false);
 
   const H = new Uint32Array([
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
@@ -85,6 +87,11 @@ export function sha256Hex(input: string): string {
     H[4] = (H[4] + e) | 0; H[5] = (H[5] + f) | 0; H[6] = (H[6] + g) | 0; H[7] = (H[7] + h) | 0;
   }
   return Array.from(H, (x) => (x >>> 0).toString(16).padStart(8, "0")).join("");
+}
+
+/** SHA-256 of UTF-8 text → lowercase hex. */
+export function sha256Hex(input: string): string {
+  return sha256BytesHex(utf8Bytes(input));
 }
 
 function rotr(x: number, n: number) {

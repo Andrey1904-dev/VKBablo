@@ -6,6 +6,8 @@ import { get, openMemoryDb, UPLOAD_DIR } from "../db.ts";
 import { seedCore } from "../seed.ts";
 import { createApp } from "../app.ts";
 
+const PNG_BYTES = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+
 test("local reference upload, owner approval and primary selection persist through API", async () => {
   openMemoryDb();
   seedCore();
@@ -36,7 +38,7 @@ test("local reference upload, owner approval and primary selection persist throu
   const storedPaths: string[] = [];
   async function uploadAndApprove(filename: string) {
     const form = new FormData();
-    form.set("file", new File([new Uint8Array([137, 80, 78, 71])], filename, { type: "image/png" }));
+    form.set("file", new File([PNG_BYTES], filename, { type: "image/png" }));
     form.set("notes", "owner supplied test reference");
     const upload = await app.request("/api/characters/milana/references", {
       method: "POST",

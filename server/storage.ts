@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { env, supabaseConfigured } from "./env.ts";
 import { UPLOAD_DIR } from "./db.ts";
 import { nid } from "./lib.ts";
+import { isVkPublicationImageMime, resolveImageMime } from "../shared/image-format.ts";
 
 const BUCKET = "media";
 const MAX_BYTES = 12 * 1024 * 1024;
@@ -30,10 +31,17 @@ export function extFromMime(mime: string): string {
   return "bin";
 }
 
-export function assertImage(mime: string, size: number) {
-  if (!ALLOWED.has(mime)) throw new Error("Допустимы только PNG, JPEG, WEBP, SVG");
+export function assertImage(mime: string, size: number, folder?: string, bytes?: Uint8Array) {
+  const normalizedMime = mime.toLowerCase();
+  if (!ALLOWED.has(normalizedMime)) throw new Error("Допустимы только PNG, JPEG, WEBP, SVG и GIF");
   if (size <= 0) throw new Error("Файл пуст");
   if (size > MAX_BYTES) throw new Error("Файл больше 12 МБ");
+  if (folder === "posts" && !isVkPublicationImageMime(normalizedMime)) {
+    throw new Error("Для публикации во ВКонтакте загрузите PNG или JPEG; WEBP, SVG и GIF не поддерживаются.");
+  }
+  if (bytes && resolveImageMime(normalizedMime, bytes) !== normalizedMime) {
+    throw new Error("Тип файла не совпадает с фактическим форматом изображения.");
+  }
 }
 
 export async function putMedia(opts: {
@@ -42,7 +50,7 @@ export async function putMedia(opts: {
   mime: string;
   filename?: string;
 }): Promise<{ path: string; key: string }> {
-  assertImage(opts.mime, opts.bytes.length);
+  assertImage(opts.mime, opts.bytes.length, opts.folder, opts.bytes);
   const ext = extFromMime(opts.mime);
   const key = `${opts.folder}/${nid("f")}.${ext}`;
   const client = adminClient();
