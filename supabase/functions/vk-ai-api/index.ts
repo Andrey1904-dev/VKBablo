@@ -20,6 +20,8 @@ import { illustrationPrompt } from "../_shared/images.ts";
 import { cancelPublicationRemotely, processPublicationJobs } from "../_shared/publish.ts";
 import { generateIdeas } from "../_shared/core/content-engine.ts";
 import { COMMUNITY_IDS, type CommunityId } from "../_shared/core/types.ts";
+import { resolveImageMime } from "../_shared/core/image-format.ts";
+import { canUseApiRoute } from "../_shared/core/authorization.ts";
 
 Deno.serve(async (req: Request) => {
   const origin = req.headers.get("origin");
@@ -141,6 +143,9 @@ Deno.serve(async (req: Request) => {
     }
 
     const user = await requireUser(req, { allowViewer: route === "bootstrap" });
+    if (!canUseApiRoute(user.role, route)) {
+      throw new ApiError(403, "Недостаточно прав для этого маршрута.", "route_forbidden");
+    }
 
     switch (route) {
       // ---------------------------------------------------------------------
@@ -558,7 +563,7 @@ Deno.serve(async (req: Request) => {
       case "settings/test-worker": {
         const result = await triggerWorker("health", true) as Record<string, unknown>;
         if (result?.ok !== true || result?.queueTouched !== false) {
-          throw new ApiError(502, "Воркер не подтвердил безопасную read-only health-проверку", "worker_health_failed");
+          throw new ApiError(502, "Воркер не подтвердил безопасную проверку состояния без действий с очередью", "worker_health_failed");
         }
         return json({ ok: true, result }, 200, origin);
       }
@@ -569,12 +574,20 @@ Deno.serve(async (req: Request) => {
         const folder = String(form.get("folder") ?? "posts") as MediaFolder;
         if (!(file instanceof File)) throw new ApiError(400, "Файл не получен", "no_file");
         if (!FOLDERS.includes(folder)) throw new ApiError(400, "Недопустимая папка", "folder");
+        if (file.size <= 0) throw new ApiError(400, "Файл пуст", "empty_file");
         if (file.size > MAX_UPLOAD_BYTES) throw new ApiError(413, "Файл больше 12 МБ", "too_large");
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        let mime: string;
+        try {
+          mime = resolveImageMime(file.type, bytes);
+        } catch (error) {
+          throw new ApiError(400, error instanceof Error ? error.message : "Формат изображения не распознан", "image_signature");
+        }
 
         const uploaded = await uploadObject({
           folder,
-          bytes: new Uint8Array(await file.arrayBuffer()),
-          mime: file.type || "image/png",
+          bytes,
+          mime,
           createdBy: user.id,
           communityId: optionalString(form.get("communityId"), 40),
           postId: optionalString(form.get("postId"), 80),

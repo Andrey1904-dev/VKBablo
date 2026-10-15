@@ -35,6 +35,7 @@ import { communityToken, saveCommunityToken } from "./vk.ts";
 import { putMedia, readLocalUpload, signedUrl } from "./storage.ts";
 import { APP_LIMITS, COMMUNITY_META } from "../shared/constants.ts";
 import { COMMUNITY_IDS, type CommunityId, type PostStatus } from "../shared/types.ts";
+import { resolveImageMime } from "../shared/image-format.ts";
 import { hashPassword, verifyPassword } from "./lib.ts";
 
 type Vars = { Variables: { user: AuthUser } };
@@ -448,11 +449,13 @@ export function createApp() {
     if (!(file instanceof File)) throw new HttpError(400, "Прикрепите файл");
     if (file.size <= 0) throw new HttpError(400, "Файл пуст");
     if (file.size > APP_LIMITS.maxUploadBytes) throw new HttpError(413, "Файл больше 12 МБ");
-    const mime = file.type || "image/jpeg";
-    if (!(APP_LIMITS.allowedMimeTypes as readonly string[]).includes(mime)) {
-      throw new HttpError(400, `Недопустимый тип файла: ${mime}`);
-    }
     const buf = Buffer.from(await file.arrayBuffer());
+    let mime: string;
+    try {
+      mime = resolveImageMime(file.type, buf);
+    } catch (error) {
+      throw new HttpError(400, error instanceof Error ? error.message : "Формат изображения не распознан");
+    }
     const stored = await putMedia({
       folder: "characters",
       bytes: buf,
@@ -657,11 +660,13 @@ export function createApp() {
     const folderValue = typeof body.folder === "string" ? body.folder : "posts";
     const allowedFolders = ["posts", "characters", "communities", "generated", "archive"] as const;
     if (!(allowedFolders as readonly string[]).includes(folderValue)) throw new HttpError(400, "Недопустимая папка загрузки");
-    const mime = file.type || "image/jpeg";
-    if (!(APP_LIMITS.allowedMimeTypes as readonly string[]).includes(mime)) {
-      throw new HttpError(400, `Недопустимый тип файла: ${mime}`);
-    }
     const buf = Buffer.from(await file.arrayBuffer());
+    let mime: string;
+    try {
+      mime = resolveImageMime(file.type, buf);
+    } catch (error) {
+      throw new HttpError(400, error instanceof Error ? error.message : "Формат изображения не распознан");
+    }
     const stored = await putMedia({
       folder: folderValue as (typeof allowedFolders)[number],
       bytes: buf,

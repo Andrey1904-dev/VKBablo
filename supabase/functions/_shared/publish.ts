@@ -9,7 +9,7 @@ import { assertVkCompatibleImage, fetchPostStats, uploadWallPhoto, wallDelete, w
 import { signedUrl } from "./storage.ts";
 import {
   assertCurrentApproval,
-  fetchRequiredPublicationImage,
+  uploadVerifiedPublicationImage,
   isRemoteVkPostId,
   shouldSkipClaimedPublication,
   PublicationSafetyError,
@@ -38,6 +38,7 @@ interface PublicationJob {
   postId: string;
   communityId: string;
   versionHash: string;
+  imageSha256: string | null;
   scheduledAt: string;
   targetGroupId: string | null;
   vkPostId: string | null;
@@ -60,6 +61,7 @@ interface PublicationPost {
   scheduled_at: string;
   content_hash: string;
   approved_hash: string | null;
+  approved_image_sha256: string | null;
   vk_post_id: string | null;
 }
 
@@ -114,7 +116,7 @@ export async function processPublicationJobs(
     try {
       const query = await admin()
         .from("posts")
-        .select("id, community_id, text, image_path, status, test_mode, scheduled_at, content_hash, approved_hash, vk_post_id")
+        .select("id, community_id, text, image_path, status, test_mode, scheduled_at, content_hash, approved_hash, approved_image_sha256, vk_post_id")
         .eq("id", job.postId)
         .maybeSingle();
       if (query.error) throw new ApiError(500, `Не удалось проверить публикацию: ${query.error.message}`, "db");
@@ -124,6 +126,14 @@ export async function processPublicationJobs(
         result.errors.push(`post ${job.postId} не найден`);
         continue;
       }
+
+      const digestQuery = await admin()
+        .from("publication_jobs")
+        .select("image_sha256")
+        .eq("id", job.id)
+        .maybeSingle();
+      if (digestQuery.error) throw new ApiError(500, `Не удалось проверить SHA-256 снимка публикации: ${digestQuery.error.message}`, "db");
+      job.imageSha256 = typeof digestQuery.data?.image_sha256 === "string" ? digestQuery.data.image_sha256 : null;
 
       // A real job whose global gates were turned off is cancelled, not reported
       // as a successful simulated publication. Dry-run jobs remain explicitly test_*.
@@ -152,6 +162,7 @@ export async function processPublicationJobs(
           scheduledAt: post.scheduled_at,
           contentHash: post.content_hash,
           approvedHash: post.approved_hash,
+          approvedImageSha256: post.approved_image_sha256,
         },
         job,
       );
@@ -165,14 +176,9 @@ export async function processPublicationJobs(
         continue;
       }
 
-      // An image is mandatory for approval and publication. Signed URL, status,
-      // MIME type and actual bytes are validated before any VK upload/post call.
+      // An image is mandatory for approval and publication. The wrapper verifies
+      // Storage bytes against the approval digest before it invokes uploadWallPhoto.
       assertVkCompatibleImage(post.image_path);
-      const image = await fetchRequiredPublicationImage(
-        post.image_path,
-        (path) => signedUrl(path, 600),
-      );
-
       const token = await readCommunityToken(job.communityId);
       if (!token || !job.targetGroupId) {
         const message = "Публикация заблокирована: отсутствует серверный VK-токен или снимок Group ID.";
@@ -182,13 +188,19 @@ export async function processPublicationJobs(
       }
 
       // Uploading a photo does not create a wall post. A failure here may be
-      // safely retried; no publication has yet been sent to VK.
-      const attachment = await uploadWallPhoto({
-        token,
-        groupId: job.targetGroupId,
-        bytes: image.bytes,
-        filename: image.filename,
-      });
+      // safely retried; no wall.post has yet been sent to VK.
+      const attachment = await uploadVerifiedPublicationImage(
+        post.image_path,
+        job.imageSha256,
+        (path) => signedUrl(path, 600),
+        (image) => uploadWallPhoto({
+          token,
+          groupId: job.targetGroupId!,
+          bytes: image.bytes,
+          filename: image.filename,
+        }),
+        fetch,
+      );
 
       // Transactional final gate checks approval, image path, target group and
       // global flags again, then records dispatch_started_at. Edits/cancellations

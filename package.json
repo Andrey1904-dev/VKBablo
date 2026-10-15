@@ -10,6 +10,8 @@
     "dev:server": "tsx watch server/index.ts",
     "build": "vite build",
     "start": "NODE_ENV=production tsx server/index.ts",
+    "sync:shared": "node scripts/sync-shared.mjs",
+    "check:shared": "node scripts/sync-shared.mjs --check",
     "test": "tsx --test server/tests/*.test.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.server.json",
     "preview": "vite preview --host 0.0.0.0 --port 5173",

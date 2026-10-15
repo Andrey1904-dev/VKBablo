@@ -189,7 +189,7 @@ export default function PostDetailPage() {
             <label className="upload-label" style={{ marginTop: 12 }}>
               <Upload size={15} />
               <span>Загрузить своё изображение (JPG/PNG)</span>
-              <input ref={fileRef} type="file" accept="image/*" onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} />
+              <input ref={fileRef} type="file" accept="image/png,image/jpeg" onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} />
             </label>
           </section>
         </div>

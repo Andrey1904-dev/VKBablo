@@ -3,11 +3,11 @@
 --
 -- Принципы:
 --  1. `anon` не имеет доступа ни к одной таблице.
---  2. `authenticated` (владелец) ЧИТАЕТ операционные данные через RLS.
---  3. Критические изменения (одобрение, планирование, отправка, персонажи,
---     правила, настройки) выполняются ТОЛЬКО через RPC/Edge Functions
---     с серверной проверкой прав — прямых политик INSERT/UPDATE нет.
---  4. Секреты (community_secrets, integration_secrets) не видны даже владельцу
+--  2. `authenticated` с ролью owner/editor читает операционные данные через RLS;
+--     integration_status, application_settings, audit_logs и другие профили owner-only.
+--  3. Критические изменения выполняются через RPC/Edge Functions с отдельной
+--     проверкой app.assert_owner() или app.assert_editor(); прямой записи нет.
+--  4. Секреты (community_secrets, integration_secrets) не видны ни одной роли
 --     через API: политик нет вообще.
 -- =============================================================================
 
@@ -57,23 +57,34 @@ drop policy if exists profiles_update_own on public.profiles;
 create policy profiles_update_own on public.profiles
   for update to authenticated
   using (id = auth.uid())
-  with check (id = auth.uid() and role = (select role from public.profiles where id = auth.uid()));
+  with check (id = auth.uid());
+-- Role immutability is enforced by a trigger, avoiding a recursive self-query in the RLS policy.
 
--- --------------------------------------------------------------------------
--- Только чтение для владельца (запись — через RPC / service role)
--- --------------------------------------------------------------------------
+-- Операционные данные видны владельцу и редактору; конфигурация интеграций,
+-- секретные настройки и аудит доступны только владельцу.
 do $$
 declare
   t text;
-  readable text[] := array[
+  editor_readable text[] := array[
     'communities','schedules','community_rules','community_rule_versions',
     'characters','character_references','posts','post_versions','approvals','topics',
     'media_assets','ai_providers','ai_prompt_templates','ai_generations',
     'generation_jobs','publication_jobs','jobs','post_statistics','analytics_snapshots',
-    'notifications','integration_status','audit_logs','application_settings'
+    'notifications'
   ];
+  owner_readable text[] := array['integration_status','audit_logs','application_settings'];
 begin
-  foreach t in array readable loop
+  foreach t in array editor_readable loop
+    execute format('drop policy if exists %I on public.%I', t || '_owner_read', t);
+    execute format('drop policy if exists %I on public.%I', t || '_editor_read', t);
+    execute format(
+      'create policy %I on public.%I for select to authenticated using (app.is_editor())',
+      t || '_editor_read', t
+    );
+    execute format('grant select on public.%I to authenticated', t);
+  end loop;
+
+  foreach t in array owner_readable loop
     execute format('drop policy if exists %I on public.%I', t || '_owner_read', t);
     execute format(
       'create policy %I on public.%I for select to authenticated using (app.is_owner())',
@@ -93,6 +104,7 @@ revoke all on public.integration_secrets from authenticated;
 -- --------------------------------------------------------------------------
 revoke all on all functions in schema app from public, anon;
 grant execute on function app.is_owner() to authenticated;
+grant execute on function app.is_editor() to authenticated;
 revoke all on all functions in schema public from public, anon;
 
 do $$
@@ -125,23 +137,19 @@ on conflict (id) do update
 drop policy if exists media_owner_read on storage.objects;
 create policy media_owner_read on storage.objects
   for select to authenticated
-  using (bucket_id = 'media' and app.is_owner());
+  using (bucket_id = 'media' and app.is_editor());
 
 drop policy if exists media_owner_insert on storage.objects;
 create policy media_owner_insert on storage.objects
   for insert to authenticated
   with check (
     bucket_id = 'media'
-    and app.is_owner()
+    and app.is_editor()
     -- разрешены только рабочие префиксы
     and (storage.foldername(name))[1] in ('communities','characters','posts','generated','archive')
   );
 
 drop policy if exists media_owner_update on storage.objects;
-create policy media_owner_update on storage.objects
-  for update to authenticated
-  using (bucket_id = 'media' and app.is_owner())
-  with check (bucket_id = 'media' and app.is_owner());
 
 -- Удаление — только service role (Edge Function проверяет, что файл не используется).
 drop policy if exists media_owner_delete on storage.objects;

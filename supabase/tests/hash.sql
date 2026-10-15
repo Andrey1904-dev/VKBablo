@@ -54,14 +54,22 @@ end $$;
 -- Проверка инварианта: одобрение невозможно подделать правкой текста.
 do $$
 declare
-  v_post_id text := 'test_hash_reset';
+  v_test_suffix text := replace(gen_random_uuid()::text, '-', '');
+  v_post_id text := 'test_hash_reset_' || v_test_suffix;
+  v_image_path text := 'posts/test_hash_reset_' || v_test_suffix || '.png';
+  v_image_sha256 text := repeat('a', 64);
 begin
+  insert into public.media_assets (bucket, path, mime_type, size_bytes, sha256, kind)
+  values ('media', v_image_path, 'image/png', 9, v_image_sha256, 'post_image')
+  on conflict do nothing;
+
   insert into public.posts (id, community_id, status, scheduled_at, title, text, image_path)
-  values (v_post_id, 'stories', 'review', now() + interval '2 days', 'Проверка', 'Текст публикации', 'posts/x.png')
-  on conflict (id) do update set text = 'Текст публикации', image_path = 'posts/x.png';
+  values (v_post_id, 'stories', 'review', now() + interval '2 days', 'Проверка', 'Текст публикации', v_image_path)
+  on conflict (id) do update set text = 'Текст публикации', image_path = excluded.image_path;
 
   update public.posts
-     set status = 'approved', approved_hash = content_hash, approved_at = now()
+     set status = 'approved', approved_hash = content_hash,
+         approved_image_sha256 = v_image_sha256, approved_at = now()
    where id = v_post_id;
 
   if not exists (select 1 from public.posts where id = v_post_id and status = 'approved') then
@@ -78,11 +86,16 @@ begin
   if exists (select 1 from public.posts where id = v_post_id and status in ('approved', 'scheduled')) then
     raise exception 'ОШИБКА БЕЗОПАСНОСТИ: статус остался одобренным после изменения';
   end if;
+  if exists (select 1 from public.posts where id = v_post_id and approved_image_sha256 is not null) then
+    raise exception 'ОШИБКА БЕЗОПАСНОСТИ: digest изображения остался после сброса одобрения';
+  end if;
 
   delete from public.posts where id = v_post_id;
+  delete from public.media_assets where bucket = 'media' and path = v_image_path;
   raise notice 'Инвариант сброса одобрения работает';
 exception
   when others then
     delete from public.posts where id = v_post_id;
+    delete from public.media_assets where bucket = 'media' and path = v_image_path;
     raise;
 end $$;

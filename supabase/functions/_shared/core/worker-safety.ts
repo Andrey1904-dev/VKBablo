@@ -1,6 +1,6 @@
 // ВНИМАНИЕ: файл сгенерирован из shared/ командой `npm run sync:shared`.
 // Правки вносите в источник: shared/<имя>.ts
-/** Safe task allowlist for the Edge queue worker. Health checks must stay read-only. */
+/** Safe task allowlist for the Edge queue worker. Health must not claim or mutate queue jobs. */
 export const WORKER_TASKS = ["tick", "planner", "publish_due", "stats", "health"] as const;
 export type WorkerTask = (typeof WORKER_TASKS)[number];
 

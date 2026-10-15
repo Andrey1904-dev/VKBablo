@@ -1,6 +1,6 @@
 # VKBablo — пошаговая передача Codex
 
-Дата актуальности: 15 октября 2026. Основание: `317e660` (уже слитый PR #10); новые изменения должны оставаться в сессионной ветке `arena/a5adadd9-vkbablo`.
+Дата актуальности: 15 октября 2026. Основание: merge commit `8a66a0e` (PR #11 уже слит в `main`). Follow-up ведётся только в закреплённой ветке `arena/edb22162-vkbablo`; PR [#12](https://github.com/Andrey1904-dev/VKBablo/pull/12) открыт, CI `test` checks прошли. Merge PR #11 и открытый PR #12 не означают, что миграции или Edge Functions применены к реальному Supabase project.
 
 ## Жёсткие ограничения
 
@@ -9,7 +9,7 @@
 - Не создавать production-аккаунт/владельца без разрешения оператора.
 - Не делать реальный `wall.post`, `wall.delete` или платный AI-запрос во время проверки.
 - Сохранить ручное одобрение каждой конкретной версии поста.
-- `test_mode`/dry-run нельзя считать успешной интеграцией. Миграции и Edge Functions сейчас **не применены и не развёрнуты**.
+- `test_mode`/dry-run нельзя считать успешной интеграцией. В рамках этого follow-up подключённый Supabase не проверялся; не считать новые forward migrations применёнными или Edge Functions развёрнутыми без проверки конкретного проекта.
 - Локальный Node/SQLite backend принудительно работает только в test/dry-run. Для real VK предназначен только защищённый Supabase worker.
 
 ## 0. Локальные проверки перед настройкой облака
@@ -66,6 +66,8 @@ supabase db push --dry-run
 9. `20261014120800_owner_bootstrap_safety.sql`
 10. `20261015100000_ai_budget_reservations.sql`
 11. `20261015101000_schedule_sync_safety.sql`
+12. `20261015102000_media_approval_integrity.sql` — media byte SHA-256, повторное одобрение прежних approvals, блокировка overwrite и финальная digest-проверка публикации.
+13. `20261015103000_owner_editor_boundaries.sql` — строгий owner/editor раздел, RLS/RPC/Storage права и fail-closed route mapping.
 
 Если dry-run показывает неожиданный `DROP`, изменение существующей миграции, иной проект или неизвестный статус — **остановиться** и выяснить причину. Уже применённые миграции не редактировать: последующие исправления — новой миграцией.
 
@@ -76,7 +78,7 @@ supabase db push
 supabase migration list --linked
 ```
 
-Ожидаемый результат: миграции `20261014120000`–`20261015101000` отмечены применёнными в том же порядке. Никакие таблицы/данные другого проекта не менялись.
+Ожидаемый результат: миграции `20261014120000`–`20261015103000` отмечены применёнными в том же порядке. Перед apply отдельно проверить переход старых `approved`/`scheduled` постов в `review` и дубликаты `(media_assets.bucket, media_assets.path)`: старые approvals намеренно требуют повторной загрузки/одобрения, а duplicate paths могут помешать уникальному индексу. Никакие таблицы/данные другого проекта не менялись.
 
 ## 3. Проверить PostgreSQL, Auth и RLS
 
@@ -104,6 +106,7 @@ select app.content_hash('stories', 'Проверка', null, now());
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/hash.sql
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/ai_budget.sql
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/schedule_sync.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/security_boundaries.sql
 ```
 
 `ai_budget.sql` работает внутри транзакции и откатывает тестовые настройки. Это всё равно надо выполнить на отдельной тестовой БД. Для реальной конкуренции (две независимые PostgreSQL-сессии; только reservation RPC, без AI/VK HTTP) использовать **только disposable БД**:
@@ -122,7 +125,7 @@ npm run test:ai-budget-concurrency
 - проверить redirect URL для `https://andrey1904-dev.github.io/VKBablo/`;
 - убедиться, что пользователь без профиля/owner роли не получает доступ к owner RPC.
 
-Ожидаемый результат: обычный `anon` не читает данные, зарегистрироваться публично нельзя, роль берётся из серверного профиля, а не из клиентского payload.
+Ожидаемый результат: обычный `anon` не читает данные, зарегистрироваться публично нельзя, роль берётся из серверного профиля, а не из клиентского payload. `owner` — только владелец; `editor` читает/меняет разрешённые операционные данные, но не `integration_status`, `application_settings`, аудит, ключи или owner-only publication controls. Профиль другого пользователя виден только owner; editor видит только собственный профиль. Изменение `profiles.role` не доступно browser update — только доверенному server-role пути; user-management API в приложении пока отсутствует.
 
 ## 4. Настроить серверные secrets и создать первого владельца через CLI
 
@@ -148,22 +151,47 @@ supabase functions deploy vk-ai-worker
 supabase functions list
 ```
 
-Ожидаемый результат: обе функции `ACTIVE`. `supabase/config.toml` отключает встроенную JWT-проверку для этих функций, поэтому внутри API обязательны свои проверки: JWT профиля/owner и одноразовый bootstrap secret; worker принимает только `WORKER_SECRET`. Не удалять эти проверки и не трактовать `verify_jwt = false` как защиту.
+Ожидаемый результат: обе функции `ACTIVE`. `supabase/config.toml` отключает встроенную JWT-проверку для этих функций, поэтому внутри API обязательны свои проверки: JWT из профиля и owner/editor route allowlist; одноразовый bootstrap secret защищает только bootstrap. Worker принимает только `WORKER_SECRET`. Не удалять эти проверки и не трактовать `verify_jwt = false` как защиту.
 
-Read-only проверка воркера должна вернуть `ok: true`, `queueTouched: false`; она не должна запускать planner/generation.
+**Безопасная health-проверка:** owner через UI выбирает Settings → «Проверить worker» (API route `settings/test-worker`). Функция отправляет worker task `health` с серверным `WORKER_SECRET`. Ожидается `ok:true`, `result.queueTouched:false`, `result.database:"reachable"`. Health читает доступность `application_settings`, не делает queue claim, planner или generation. Это не полностью read-only: после проверки worker пытается записать `worker_run` в `audit_logs` (ошибка этой best-effort записи не отменяет успешный health). Не отправляйте `WORKER_SECRET` в browser/чат/CLI логи.
 
 ## 6. Настроить Cron
 
 Миграция `20261014120400_cron.sql` регистрирует `pg_cron` задания; URL и секрет воркера читаются из Vault (`vk_ai_worker_url`, `vk_ai_worker_secret`). В Dashboard → Vault добавить значения только для своего тестового проекта.
 
-Проверка:
+Сначала проверьте регистрацию и SQL-вызовы:
 
 ```sql
-select jobname, schedule, active, command from cron.job order by jobname;
-select * from cron.job_run_details order by start_time desc limit 20;
+select jobid, jobname, schedule, active, command from cron.job order by jobname;
+select jobid, status, return_message, start_time, end_time
+from cron.job_run_details order by start_time desc limit 30;
 ```
 
-Ожидаемый результат: есть `vk-ai-worker-tick`, `vk-ai-worker-planner`, `vk-ai-worker-publication`, `vk-ai-worker-stats`, `vk-ai-maintenance`, `vk-ai-requeue-stale`; последние запуски без HTTP/auth ошибок. Если `pg_cron`/`pg_net` недоступны, не заявлять об автоматизации: вручную настроить поддерживаемое расписание или оставить функции выключенными.
+`cron.job` подтверждает только регистрацию расписания. `cron.job_run_details` показывает выполнение SQL-команды, которая делает асинхронный `net.http_post`; сам по себе он не доказывает доставку запроса Edge worker-у.
+
+Для фактической цепочки смотрите owner-only audit trail:
+
+```sql
+select created_at, action, result, details->>'task' as task,
+       details->>'requestId' as request_id, details->>'source' as source
+from public.audit_logs
+where action in ('cron_dispatch','worker_run','cron_skip')
+order by created_at desc limit 100;
+```
+
+`cron_skip` означает, что не заданы URL/`pg_net`/секрет; `cron_dispatch` означает, что pg_net принял запрос на отправку. В `net._http_response` сопоставьте `request_id`: HTTP 2xx и `worker_returned_ok=true` подтверждают, что Edge handler ответил `{ok:true}` (данные ответа не выводятся). `worker_run` с `details.source = 'pg_cron'` — дополнительное положительное подтверждение, что handler выполнился; worker пишет этот audit event best-effort, поэтому отсутствие строки не доказывает, что HTTP handler не работал. Ответы pg_net могут удаляться retention cleanup. Для проверки фактической обработки очереди отдельно сверяйте generation/publication job records по времени и task; health task специально очередь не трогает.
+
+```sql
+select a.created_at, a.details->>'task' as task, r.id,
+       r.status_code, r.timed_out, r.error_msg,
+       coalesce(r.content ~ '"ok"[[:space:]]*:[[:space:]]*true', false) as worker_returned_ok
+from public.audit_logs a
+left join net._http_response r on r.id = (a.details->>'requestId')::bigint
+where a.action = 'cron_dispatch'
+order by a.created_at desc limit 50;
+```
+
+Ожидаемые имена зарегистрированных задач: `vk-ai-worker-tick`, `vk-ai-worker-planner`, `vk-ai-worker-publication`, `vk-ai-worker-stats`, `vk-ai-maintenance`, `vk-ai-requeue-stale`. Если `pg_cron`/`pg_net` недоступны, не заявлять об автоматизации: оставить её выключенной или отдельно согласовать поддерживаемое расписание.
 
 Система действительно умеет **подготавливать** будущие материалы: planner находит слоты, создаёт `full_post` задачи, worker генерирует статус `review`. Это не означает 12 успешно готовых постов при выключенном Cron, ошибке worker, исчерпанном бюджете или существующем ошибочном слоте. Никакая задача не должна автоматически одобрять публикацию.
 
@@ -177,7 +205,7 @@ Migration создаёт bucket `media` приватным и политики �
 - прямой `anon` download не работает;
 - upload и signed URL доступны только нужному authenticated/Edge пути.
 
-**Не включать публичность bucket.** Пользовательская загрузка получает новый UUID object path с `upsert=false`; не перезаписывать объект, на который уже ссылается одобренный пост.
+**Не включать публичность bucket.** Пользовательская загрузка получает новый UUID object path с `upsert=false`; authenticated Storage UPDATE policy отсутствует. У одобренного изображения сохраняется SHA-256 точных байтов; publisher сверяет его до фото/поста VK. После migration существующие `approved`/`scheduled` посты требуют загрузить PNG/JPEG заново и повторить owner approval.
 
 ## 8. Подключить AI-провайдера безопасно
 
@@ -213,7 +241,7 @@ npm test
 - убедиться, что результат `review`, `approved_hash IS NULL`, `test_mode=true` для mock generation;
 - проверить, что `schedule_post` возвращает `dryRun=true`, а publication job имеет `dry_run=true` и `test_…` ID;
 - изменить текст/изображение/время — хэш/одобрение должны сброситься;
-- нажать worker health — `queueTouched=false`, generation queue не меняется;
+- выполнить owner-only «Проверить worker»: `queueTouched=false`, `generation_jobs`/`publication_jobs` не меняются; worker best-effort пишет `worker_run` в audit log, но отсутствие этой записи само по себе не опровергает успешный health;
 - отменить test/dry-run слот и проверить его статус в БД.
 
 Ожидаемый результат: dry-run не делает запросов к VK и платному AI, неподтверждённая или изменённая версия не публикуется.
@@ -258,7 +286,7 @@ npm run typecheck
 npm test
 npm run build
 npm run build:pages
-node scripts/sync-shared.mjs --check
+npm run check:shared
 node --check scripts/bootstrap-owner.mjs
 npm run test:ai-budget-concurrency   # только disposable PostgreSQL, с явным confirmation
 ```
@@ -269,4 +297,4 @@ npm run test:ai-budget-concurrency   # только disposable PostgreSQL, с я
 npx --yes deno check supabase/functions/vk-ai-api/index.ts supabase/functions/vk-ai-worker/index.ts
 ```
 
-Ожидаемый результат: обе функции проходят Deno type check; это **не** запуск в Supabase Edge runtime. Для SQL: применить миграции к отдельному PostgreSQL/Supabase проекту и выполнить integration SQL; `pglast`/PGlite ограниченные fixtures не заменяют проверку всей схемы, grants/RLS и конкурентных транзакций. В финальном отчёте явно перечислить непроведённые PostgreSQL, Edge runtime, browser/WebKit и внешние API проверки.
+Ожидаемый результат: обе функции проходят Deno type check; это **не** запуск в Supabase Edge runtime. Для SQL: применить миграции до `20261015103000` к отдельному PostgreSQL/Supabase проекту и выполнить все четыре integration fixtures, включая `security_boundaries.sql`; `pglast` внешний parser не проверяет PL/pgSQL execution, а ограниченные PGlite fixtures не заменяют полную схему, grants/RLS и конкурентные транзакции. В финальном отчёте явно перечислить непроведённые PostgreSQL, Edge runtime, browser/WebKit и внешние API проверки.

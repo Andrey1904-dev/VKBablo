@@ -9,8 +9,13 @@ import {
   shouldRetryDefinitePublicationFailure,
   shouldSkipClaimedPublication,
   stalePublicationDisposition,
+  uploadVerifiedPublicationImage,
 } from "../../shared/publication-safety.ts";
-import { contentHash } from "../../shared/hash.ts";
+import { contentHash, sha256BytesHex } from "../../shared/hash.ts";
+
+const APPROVED_PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01]);
+const JPEG_SIGNATURE_BYTES = Uint8Array.from([0xff, 0xd8, 0xff, 0x00, 0x10]);
+const APPROVED_IMAGE_SHA256 = sha256BytesHex(APPROVED_PNG);
 
 // Edge modules read Deno env at import time. The test supplies an empty runtime
 // shim and injects a mock fetcher into every VK method exercised below.
@@ -28,6 +33,7 @@ function approvedSnapshot() {
     text: "Approved text",
     imagePath: "posts/post-1.png",
     scheduledAt: "2026-10-15T10:30:00.000Z",
+    approvedImageSha256: APPROVED_IMAGE_SHA256,
   };
   const hash = contentHash({
     communityId: post.communityId,
@@ -41,6 +47,7 @@ function approvedSnapshot() {
       postId: post.id,
       communityId: post.communityId,
       versionHash: hash,
+      imageSha256: APPROVED_IMAGE_SHA256,
       scheduledAt: post.scheduledAt,
       status: "running",
     },
@@ -155,6 +162,9 @@ test("approved snapshot is invalidated by text, image, community, or schedule ch
   const timeHash = contentHash({ ...post, scheduledAt: "2026-10-15T14:30:00.000Z" });
   assert.equal(hasCurrentApproval({ ...post, scheduledAt: "2026-10-15T14:30:00.000Z", contentHash: timeHash }, job), false);
   assert.equal(hasCurrentApproval({ ...post, approvedHash: null }, job), false);
+  assert.equal(hasCurrentApproval({ ...post, approvedImageSha256: "f".repeat(64) }, job), false);
+  assert.equal(hasCurrentApproval(post, { ...job, imageSha256: "e".repeat(64) }), false);
+  assert.equal(hasCurrentApproval(post, { ...job, imageSha256: null }), false);
 });
 
 test("missing or unavailable approved image blocks publication before VK", async () => {
@@ -163,7 +173,7 @@ test("missing or unavailable approved image blocks publication before VK", async
     /отсутствует изображение/,
   );
   await assert.rejects(
-    () => fetchRequiredPublicationImage("posts/post.png", async () => null),
+    () => fetchRequiredPublicationImage("posts/post.png", async () => null, undefined, APPROVED_IMAGE_SHA256),
     /недоступно в Supabase Storage/,
   );
   await assert.rejects(
@@ -171,19 +181,83 @@ test("missing or unavailable approved image blocks publication before VK", async
       "posts/post.png",
       async () => "https://mock-storage.invalid/signed",
       async () => new Response("missing", { status: 404 }),
+      APPROVED_IMAGE_SHA256,
     ),
     /HTTP 404/,
+  );
+  await assert.rejects(
+    () => fetchRequiredPublicationImage("posts/post.png", async () => "https://mock-storage.invalid/signed"),
+    /нет проверенного SHA-256/,
   );
 
   const image = await fetchRequiredPublicationImage(
     "posts/post.png",
     async () => "https://mock-storage.invalid/signed",
-    async () => new Response(new Uint8Array([137, 80, 78, 71]), {
+    async () => new Response(APPROVED_PNG, {
       status: 200,
       headers: { "content-type": "image/png" },
     }),
+    APPROVED_IMAGE_SHA256,
   );
   assert.equal(image.mimeType, "image/png");
   assert.equal(image.filename, "post.png");
-  assert.deepEqual([...image.bytes], [137, 80, 78, 71]);
+  assert.deepEqual([...image.bytes], [...APPROVED_PNG]);
+  assert.equal(image.sha256, APPROVED_IMAGE_SHA256);
+
+  const changedBytes = new Uint8Array(APPROVED_PNG);
+  changedBytes[changedBytes.length - 1] ^= 0xff;
+  await assert.rejects(
+    () => fetchRequiredPublicationImage(
+      "posts/post.png",
+      async () => "https://mock-storage.invalid/signed",
+      async () => new Response(changedBytes, {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      }),
+      APPROVED_IMAGE_SHA256,
+    ),
+    /байты изображения отличаются/,
+  );
+
+  await assert.rejects(
+    () => fetchRequiredPublicationImage(
+      "posts/post.png",
+      async () => "https://mock-storage.invalid/signed",
+      async () => new Response(JPEG_SIGNATURE_BYTES, {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      }),
+      APPROVED_IMAGE_SHA256,
+    ),
+    /не соответствует PNG\/JPEG/,
+  );
+});
+
+test("changed Storage bytes never reach VK photo upload or the downstream wall.post", async () => {
+  const changedBytes = new Uint8Array(APPROVED_PNG);
+  changedBytes[changedBytes.length - 1] ^= 0xff;
+  let photoUploadCalls = 0;
+  let wallPostCalls = 0;
+
+  const sendApprovedPost = async () => {
+    const attachment = await uploadVerifiedPublicationImage(
+      "posts/post-1.png",
+      APPROVED_IMAGE_SHA256,
+      async () => "https://mock-storage.invalid/signed",
+      async () => {
+        photoUploadCalls += 1;
+        return "photo123_456";
+      },
+      async () => new Response(changedBytes, {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      }),
+    );
+    wallPostCalls += 1;
+    return attachment;
+  };
+
+  await assert.rejects(sendApprovedPost, /байты изображения отличаются/);
+  assert.equal(photoUploadCalls, 0);
+  assert.equal(wallPostCalls, 0);
 });

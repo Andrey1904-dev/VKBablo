@@ -59,8 +59,21 @@ begin
 end;
 $$;
 
--- Проверка владельца/редактора по JWT. Используется в RLS и RPC.
+-- Проверка owner/editor по JWT: app.is_owner — только владелец, app.is_editor — владелец или редактор.
 create or replace function app.is_owner()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, app, pg_temp
+as $$
+  select exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid() and p.role = 'owner'
+  );
+$$;
+
+create or replace function app.is_editor()
 returns boolean
 language sql
 stable
@@ -87,7 +100,27 @@ begin
     raise exception 'Требуется авторизация' using errcode = '42501';
   end if;
   if not app.is_owner() then
-    raise exception 'Недостаточно прав: нужен владелец' using errcode = '42501';
+    raise exception 'Недостаточно прав: нужна роль владельца' using errcode = '42501';
+  end if;
+  return v_uid;
+end;
+$$;
+
+create or replace function app.assert_editor()
+returns uuid
+language plpgsql
+stable
+security definer
+set search_path = public, app, pg_temp
+as $$
+declare
+  v_uid uuid := auth.uid();
+begin
+  if v_uid is null then
+    raise exception 'Требуется авторизация' using errcode = '42501';
+  end if;
+  if not app.is_editor() then
+    raise exception 'Недостаточно прав: нужна роль редактора или владельца' using errcode = '42501';
   end if;
   return v_uid;
 end;
@@ -160,6 +193,25 @@ create table if not exists public.profiles (
 drop trigger if exists profiles_touch on public.profiles;
 create trigger profiles_touch before update on public.profiles
   for each row execute function app.touch_updated_at();
+
+create or replace function app.guard_profile_role_change()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, app, pg_temp
+as $$
+begin
+  if new.role is distinct from old.role and coalesce(auth.role(), '') <> 'service_role' then
+    raise exception 'Изменять роли пользователей может только доверенный серверный процесс'
+      using errcode = '42501';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists profiles_role_immutable on public.profiles;
+create trigger profiles_role_immutable before update of role on public.profiles
+  for each row execute function app.guard_profile_role_change();
 
 -- Профиль создаётся автоматически при регистрации пользователя в Supabase Auth.
 create or replace function app.handle_new_user()
@@ -379,6 +431,7 @@ create table if not exists public.posts (
   vk_post_id text,
   content_hash text not null default '',
   approved_hash text,
+  approved_image_sha256 text check (approved_image_sha256 is null or approved_image_sha256 ~ '^[0-9a-f]{64}$'),
   approved_at timestamptz,
   approved_by uuid references public.profiles(id),
   error_message text,
@@ -526,6 +579,7 @@ create table if not exists public.media_assets (
   path text not null,
   mime_type text not null default 'image/png',
   size_bytes bigint not null default 0 check (size_bytes >= 0),
+  sha256 text check (sha256 is null or sha256 ~ '^[0-9a-f]{64}$'),
   kind text not null default 'post_image' check (kind in (
     'post_image','character_reference','community_logo','generated','archive'
   )),
@@ -626,6 +680,7 @@ create table if not exists public.publication_jobs (
   post_id text not null references public.posts(id) on delete cascade,
   community_id text not null references public.communities(id) on delete cascade,
   version_hash text not null,
+  image_sha256 text check (image_sha256 is null or image_sha256 ~ '^[0-9a-f]{64}$'),
   scheduled_at timestamptz not null,
   vk_post_id text,
   status text not null default 'queued' check (status in ('queued','running','done','failed','cancelled','skipped')),
