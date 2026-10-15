@@ -28,9 +28,9 @@
    `npm run build:pages`, `sync-shared --check`, `deno check`, `node --check scripts/bootstrap-owner.mjs`,
    pglast outer grammar и `git diff --check` прошли. Vite сообщает JS chunk около 726 kB >500 kB.
    Deno check/SQL parse не заменяют Edge runtime/DB execution; миграции не исполнялись.
-7. Owner-bootstrap server-only flow, CLI, migration и docs добавлены в код; реальные сервисы,
-   аккаунты, миграции и функции не запускались. Осталось финально проверить diff/secret scan,
-   обновить этот handoff с фактическими результатами, затем commit/push/PR без merge.
+7. Owner-bootstrap server-only flow, CLI, migration и docs добавлены; реальные сервисы,
+   аккаунты, миграции и функции не запускались. Три блока закоммичены: `57c6794`, `b5fe96c`,
+   `851ae49`; diff и secret-pattern scan чисты. Осталось push текущей ветки и открыть PR без merge.
 8. Сохранять обязательное ручное одобрение каждого поста; изменение текста, изображения,
    сообщества или времени сбрасывает одобрение. Не включать реальные публикации или платные AI.
 9. Сохранить четыре сообщества и расписание: «Ну и история», «Милана и её деревенский
@@ -571,7 +571,7 @@ SQL lock order, grants, stale/unknown workflows. Не отправлять ре�
   reference capabilities и сеет prompt templates. Новая trigger migration `20261014120700...`
   защищает scheduled/published status; оба SQL-файла не применялись.
 
-### Block 3 — owner bootstrap (код/docs добавлены; локальные проверки пройдены, commit ожидает)
+### Block 3 — owner bootstrap (локальные проверки пройдены; commit `851ae49`)
 - Server-only `OWNER_SETUP_SECRET` длиной 32–256, fixed-work comparison, operator-only CLI,
   закрытый latch + service-role RPCs, Auth profile default viewer, atomic promotion/audit.
 - Frontend не отправляет setup secret; first-run Supabase UI направляет к CLI.
@@ -584,12 +584,13 @@ SQL lock order, grants, stale/unknown workflows. Не отправлять ре�
 - В docs есть final Codex checklist; сохранить без реальных сервисов, секретов и аккаунтов.
 
 ### Wrap-up
-- Финальные локальные проверки после правок прошли: `npm run typecheck`, `npm test` (30/30),
-  обе сборки, shared parity (15 files), `deno check`, CLI syntax check, pglast outer SQL parse и
-  `git diff --check`. Production/Pages JS chunks 725.95/726.03 kB; Vite warning >500 kB сохранён.
-- Осталось проверить/зафиксировать diff, сформировать отдельные коммиты по блокам и затем push/PR.
-- Push только в `arena/ff5941a8-vkbablo`, открыть PR из этой ветки, не merge. Не просить ключи и не
-  применять миграции к реальному Supabase.
+- Финальные локальные проверки прошли: `npm run typecheck`, `npm test` (30/30), обе сборки,
+  shared parity (15 files), `deno check`, CLI syntax check, pglast outer SQL parse и `git diff --check`.
+  Production/Pages JS chunks 725.95/726.03 kB; Vite warning >500 kB сохранён.
+- Diff и secret-pattern scan проверены; блоки зафиксированы в `57c6794`, `b5fe96c`, `851ae49`.
+  Рабочая ветка должна оставаться чистой перед push.
+- Осталось отправить только `arena/ff5941a8-vkbablo` и открыть PR из неё; PR не сливать.
+  Не просить ключи и не применять миграции к реальному Supabase.
 
 ## 13. Команды
 
