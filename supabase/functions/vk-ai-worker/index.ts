@@ -11,6 +11,7 @@
 import { admin, callRpc } from "../_shared/db.ts";
 import { errorResponse, json, preflight } from "../_shared/http.ts";
 import { WORKER_SECRET } from "../_shared/env.ts";
+import { constantTimeTextEqual } from "../_shared/core/bootstrap-safety.ts";
 import { runGenerationJob, type GenerationJob } from "../_shared/jobs.ts";
 import { collectStatistics, markDuePostsPublished, processPublicationJobs } from "../_shared/publish.ts";
 
@@ -25,13 +26,8 @@ interface WorkerRequest {
 function authorize(req: Request): boolean {
   if (!WORKER_SECRET) return false;
   const header = req.headers.get("x-worker-secret") || "";
-  // Сравнение постоянного времени: защита от подбора секрета.
-  if (header.length !== WORKER_SECRET.length) return false;
-  let diff = 0;
-  for (let i = 0; i < header.length; i++) {
-    diff |= header.charCodeAt(i) ^ WORKER_SECRET.charCodeAt(i);
-  }
-  return diff === 0;
+  // Shared fixed-work comparison is also used by the one-time owner bootstrap.
+  return constantTimeTextEqual(header, WORKER_SECRET);
 }
 
 async function runGenerationQueue(workerId: string) {
@@ -63,7 +59,7 @@ async function runGenerationQueue(workerId: string) {
         p_job_id: claimed.id,
         p_ok: false,
         p_error: message,
-        p_cost: 0,
+        p_cost: Number((error as { costUsd?: number })?.costUsd ?? 0),
       })) as { status: string };
 
       if (finished?.status === "failed") summary.failed += 1;

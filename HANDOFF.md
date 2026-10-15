@@ -1,38 +1,45 @@
 # VK AI Manager — передача проекта (handoff для следующего агента)
 
-Документ описывает **фактическое состояние репозитория** по состоянию на HEAD ветки
-`arena/828b3734-vkbablo` (коммиты `83dda89` → `e9c3616` → `1217f92`): что сделано, что нет,
-какие контракты нельзя ломать, что уже проверено, а что ещё нигде не запускалось.
+Документ обновляется вместе с кодом. Текущая рабочая ветка Arena —
+`arena/ff5941a8-vkbablo`; ориентируйтесь на `git status`/`git log`, а не на старые номера
+веток и коммитов, оставшиеся в исторических разделах ниже. Дата последней проверки: 15 октября 2026.
 
-Читать целиком перед первой правкой. Всё, что не описано здесь как «проверено», —
+Читать ограничения и актуальный статус до правок. Всё, что не отмечено как проверенное, —
 **не проверено** и не должно называться работающим.
 
-## 0. Сводка в десяти строках (для быстрого старта)
+## 0. Сводка для быстрого старта
 
-1. Репозиторий `Andrey1904-dev/VKBablo`, рабочая ветка **`arena/828b3734-vkbablo`**,
-   текущие коммиты: `83dda89` (тег `checkpoint/pre-supabase-migration`) → `e9c3616` → `1217f92`.
-2. Cloudflare полностью удалён; целевая архитектура — GitHub Pages (frontend) + Supabase
-   (Postgres/RLS/Auth/Storage/Edge Functions/Cron) + VK API + сменные AI-адаптеры.
-3. Код этапов 2, 3 и половины 4 написан: 5 миграций (27 таблиц, 35 RPC, RLS, сиды, Cron),
-   Edge Functions `vk-ai-api` (34 маршрута) и `vk-ai-worker`, слой данных фронтенда
-   `src/data/*` (режимы supabase / local / demo).
-4. **Ничего из облачного контура ещё не запускалось**: миграции не применялись, функции не
-   деплоились, ключей нет, реальные VK-вызовы и платные AI не выполнялись. Тарифы и лимиты
-   не подтверждены.
-5. Проверено локально: `npm run typecheck` (чисто), `npm test` (11/11), `npx vite build`,
-   синхронизация ядра `--check`, живой смоук локального стенда (одобрение обязательно,
-   правка сбрасывает одобрение).
-6. Следующая главная задача — **этап 4**: перевести 14 файлов (12 страниц + `App.tsx` +
-   `components/layout.tsx`) с прямых вызовов `@/lib/api` на `getBackend()` из `@/data`,
-   **не меняя дизайн**. Готовая таблица соответствия вызовов — в §8.2.
-7. Затем: `CODEX_SETUP.md` + workflow публикации на GitHub Pages (этап 9), интеграционные
-   тесты на реальном Supabase (этап 8), доработки студии/календаря (этапы 5–6), отчёт (этап 10).
-8. Ни при каких условиях: не включать реальную публикацию в VK, не вызывать платные API,
-   не выдавать демо-данные за настоящие, не менять правила четырёх сообществ, не возвращать
-   Cloudflare, не ломать канонический хэш одобрения (§7.1).
-9. Карта кода — §6, контракты — §7, самые частые грабли и уже исправленные ошибки — §11:
-   читать до первой правки, там объяснено, почему некоторые «очевидные» улучшения запрещены.
-10. Всё, что не помечено в §9 как проверенное, нельзя называть работающим.
+1. Архитектура сохранена: React + TypeScript + Vite, Supabase (Postgres/RLS/Auth/Storage/Edge
+   Functions/Cron), отдельные local/demo режимы; Cloudflare не используется.
+2. Облачный контур не подключён: миграции не применялись, Edge Functions не деплоились,
+   реальных секретов/аккаунтов нет; реальные VK-посты и платные AI-вызовы не выполнялись.
+3. Блок безопасности публикации реализован в коде: БД-фенс перед `wall.post`, неизвестный
+   результат не переотправляется автоматически, строгая проверка одобрения/изображения,
+   подтверждённая удалённая отмена `wall.delete`, безопасная stale-job обработка.
+4. Добавлены миграции `20261014120500_vk_publication_safety.sql`,
+   `20261014120600_ai_generation_safety.sql`, `20261014120700_generation_mode_safety.sql` и
+   `20261014120800_owner_bootstrap_safety.sql`; ни одна не применялась и все требуют
+   PostgreSQL/Supabase-проверки.
+5. AI generation paths обновлены: явные режимы, prompt templates/пользовательские подсказки,
+   правдивая reference capability, mock-only transport tests, combined/component budget preflight;
+   paid calls выключены по умолчанию. Конкурентный расход между несколькими workers не атомарно
+   зарезервирован — не включать paid calls до отдельного решения и проверки.
+6. Локально проверено: `npm test` — 30/30, `npm run typecheck`, `npm run build`,
+   `npm run build:pages`, `sync-shared --check`, `deno check`, `node --check scripts/bootstrap-owner.mjs`,
+   pglast outer grammar и `git diff --check` прошли. Vite сообщает JS chunk около 726 kB >500 kB.
+   Deno check/SQL parse не заменяют Edge runtime/DB execution; миграции не исполнялись.
+7. Owner-bootstrap server-only flow, CLI, migration и docs добавлены в код; реальные сервисы,
+   аккаунты, миграции и функции не запускались. Осталось финально проверить diff/secret scan,
+   обновить этот handoff с фактическими результатами, затем commit/push/PR без merge.
+8. Сохранять обязательное ручное одобрение каждого поста; изменение текста, изображения,
+   сообщества или времени сбрасывает одобрение. Не включать реальные публикации или платные AI.
+9. Сохранить четыре сообщества и расписание: «Ну и история», «Милана и её деревенский
+   гламур», «ВСЯ СУТЬ ЖИЗНИ», «Вероника в поиске настоящего мужчины»; 13:30 / 17:30 / 21:30,
+   Europe/Moscow, 12 постов/день.
+10. Выполнять `npm run typecheck`, `npm test`, `npm run build`, `npm run build:pages` и
+    документировать фактический результат; все сервисные проверки только с моками.
+11. Пользователь попросил отдельные коммиты по завершённым блокам, push только в текущую
+    ветку и PR без merge. Перед публикацией убедиться, что коммиты/PR выполнены; ничего не merge-ить.
 
 ---
 
@@ -108,18 +115,14 @@ GitHub (исходники)  →  GitHub Actions  →  GitHub Pages (React + Vit
 ## 2. Где мы находимся: репозиторий, ветка, коммиты
 
 - Репозиторий: `Andrey1904-dev/VKBablo` (локально `/home/user/VKBablo`).
-- Рабочая ветка: **`arena/828b3734-vkbablo`** (в этой сессии работать только в ней).
-- Коммиты:
-  - `83dda89` — исходное состояние (merge PR #1), на него поставлен тег
-    **`checkpoint/pre-supabase-migration`**;
-  - `e9c3616` — «Миграция на Supabase: Cloudflare снят, схема БД, Edge API и слой данных»
-    (69 файлов, +13167/−602). Это текущее состояние, рабочее дерево чистое.
-- Отдельной «ветки миграции», как просил владелец, пока нет: работа идёт в
-  `arena/828b3734-vkbablo`, чекпоинт зафиксирован тегом. Если потребуется — создать ветку
-  от `83dda89` и перенести туда коммит `e9c3616` (или смержить тег), но **не переключать
-  эту сессию на другую ветку**.
-- Локальный стенд в песочнице мог остаться запущенным: `npm run dev` (web :5173, api :8787).
-  Проверить: `curl -s http://127.0.0.1:8787/api/health`.
+- Рабочая ветка Arena: **`arena/ff5941a8-vkbablo`**. Эта сессия привязана к ней; не
+  переключать/создавать другие ветки и не пушить в другие ветки.
+- Коммиты исходного проекта описаны в исторических разделах; актуальный `HEAD` проверяйте
+  через `git log -5 --oneline`. По завершении каждого блока делать отдельный коммит.
+- До финального review: работать только на этой ветке; push только
+  `git push origin arena/ff5941a8-vkbablo`; PR открыть из неё и не сливать.
+- Локальный dev-сервер запускайте только по необходимости; VK/Supabase/AI всегда через моки,
+  без реальных учётных записей или секретов.
 
 ---
 
@@ -131,8 +134,8 @@ GitHub (исходники)  →  GitHub Actions  →  GitHub Pages (React + Vit
    и историю Git. Архитектурные изменения — только без потери работающей функциональности.
 2. **Cloudflare исключён** полностью.
 3. **Никаких реальных ключей и платных вызовов на этом этапе**: не требовать VK/AI/Supabase
-   ключей, не вызывать платные API, не публиковать в VK. Ключи владелец подключит позже сам
-   по документу `CODEX_SETUP.md` (его ещё надо написать).
+   ключей, не вызывать платные API, не публиковать в VK. Будущая настройка описана в
+   `CODEX_SETUP.md`; реальные сервисы в этом блоке не подключались.
 4. **Секреты не попадают в Git, в браузер, в логи, в localStorage и в чат.**
    В клиентском коде допустимы только `VITE_SUPABASE_URL` и `VITE_SUPABASE_ANON_KEY`
    (publishable/anon — безопасен при включённом RLS). `service_role`, VK-токены и AI-ключи —
@@ -168,19 +171,18 @@ GitHub (исходники)  →  GitHub Actions  →  GitHub Pages (React + Vit
 
 | № | Этап | Статус | Что именно сделано / чего не хватает |
 |---|---|---|---|
-| 1 | Аудит и план | ✅ готово | `AUDIT.md` + тег `checkpoint/pre-supabase-migration` |
-| 2 | Cloudflare → Supabase | ✅ в коде | `wrangler.toml`, `server/worker.ts`, `bindWorkerEnv` удалены; документация очищена; Edge-слой написан и лежит в `supabase/functions` |
-| 3 | БД + безопасность | 🟡 код есть, **не применён** | 5 миграций (27 таблиц, 35 RPC, RLS, сиды, Cron), `supabase/config.toml`, `supabase/tests/hash.sql`; ни одна миграция ещё не выполнялась — нет ни локального Postgres, ни проекта Supabase |
-| 4 | Интерфейс (слой данных + сохранение дизайна) | 🟡 наполовину | слой данных `src/data/*` + `src/lib/config.ts` готовы и проходят typecheck; **страницы ещё не переведены** на него — 12 страниц, `App.tsx` и `components/layout.tsx` по-прежнему зовут `@/lib/api` напрямую |
-| 5 | Контент-движок | 🟡 в коде | тестовый детерминированный движок `shared/content-engine.ts`, правила и проверки `shared/rules.ts`, `similarity.ts`, AI-адаптеры `_shared/ai.ts` (test/openai/compatible/custom) с учётом расходов; реальный провайдер не проверялся (ключей нет) |
-| 6 | Планировщик | 🟡 в коде | `_shared/jobs.ts`, `_shared/publish.ts`, `vk-ai-worker`, RPC очередей, Cron-задачи; **ничего из этого не запускалось** (Postgres нет). Локальный стенд имеет собственный таймер/очередь и проверен вживую |
-| 7 | Интеграции VK + AI | 🟡 в коде | `_shared/vk.ts` (группа, загрузка фото, отложенная запись, статистика, ошибки), `_shared/ai.ts` (адаптеры, бюджеты), `_shared/secrets.ts` (AES-256-GCM), `_shared/storage.ts`; реальные вызовы VK не выполнялись, лимиты VK не верифицированы |
-| 8 | Тестирование | 🟡 частично | `npm run typecheck` — чисто, `npm test` — 11/11 (одобрение + хэш версий), `npx vite build` — ОК, `sync-shared --check` — ОК, живой смоук локального стенда; **нет** интеграционных тестов против реального Supabase/VK/AI |
-| 9 | Развёртывание | ❌ не начато | есть CI (`.github/workflows/ci.yml`), **нет** workflow публикации на GitHub Pages, нет `CODEX_SETUP.md`, нет проверки секретов на pre-deploy |
-| 10 | Итоговый отчёт | ❌ не начато | шаблон требований — в разделе 12 |
+| 1 | Аудит и план | ✅ исторически готово | `AUDIT.md`; исходные этапы описаны в истории handoff. |
+| 2 | Архитектура Supabase | ✅ в коде | React/Vite + Supabase Edge/RPC/RLS сохранены; Cloudflare не используется. Реальный облачный контур не подключён. |
+| 3 | БД + безопасность | 🟡 код есть, не применён | Добавлены миграции `20261014120500`–`20261014120800`, включая viewer-by-default profiles и закрытый one-time owner latch; ни одна не применялась. PL/pgSQL/trigger/RLS-пути требуют PostgreSQL/Supabase-проверки. |
+| 4 | Интерфейс / слой данных | ✅ код есть | `src/data/*`, hash-router, существующие страницы и дизайн сохранены; безопасная отмена в `PostDetailPage`; `npm run build` и `npm run build:pages` проходят. |
+| 5 | AI/content | 🟡 код + mock tests | Явные generation modes, безопасные prompt templates, точная маркировка reference support, combined cost preflight, test/mock default, paid calls off; Edge runtime и реальные провайдеры не проверялись. |
+| 6 | Планировщик / публикация | 🟡 код есть, внешне не проверен | Добавлены dispatch fence, no-duplicate unknown outcome, required-image/approval guards, cancellation lifecycle и защита от генерации поверх scheduled/published. `deno check` проходит; PostgreSQL/Supabase runtime не проверен. |
+| 7 | VK + AI интеграции | 🟡 mock-only | Все тесты используют injected mocks/deterministic local engine. Реальные VK/AI вызовы и тарифы не проверялись. |
+| 8 | Тестирование | 🟡 локально проверено | Результаты актуальных команд — §9; все provider/VK tests используют моки. Edge/Deno static check прошёл; migration execution, реальные сервисы и runtime остаются вне проверки. |
+| 9 | Setup / deploy | 🟡 код и docs готовы, live setup не выполнялся | Добавлены server-only `OWNER_SETUP_SECRET`, one-time DB latch/RPCs, operator CLI и инструкции; миграции не применялись, Edge Functions не деплоились, реальный owner/Auth account не создавался. |
+| 10 | Итоговый handoff | 🟡 локально обновлён | `CODEX_SETUP.md`, `.env.example`, `README.md` и этот handoff описывают безопасный bootstrap; финальные локальные проверки и актуальные итоги записаны в §9. |
 
-Легенда: ✅ сделано и проверено · 🟡 код есть, но не проверено в реальной среде · ❌ не сделано.
-
+Легенда: ✅ сделано и проверено указанным способом · 🟡 код есть, но проверен не полностью/не на реальном сервисе · ❌ не сделано.
 ---
 
 ## 5. Как система работает целиком (важно понимать до правок)
@@ -188,8 +190,10 @@ GitHub (исходники)  →  GitHub Actions  →  GitHub Pages (React + Vit
 1. **Фронтенд** (GitHub Pages) общается с Supabase двумя способами:
    - **чтение** — PostgREST под RLS (пользователь видит только то, что разрешает политика);
    - **изменения** — Edge Function `vk-ai-api` (проверяет JWT, роль и вызывает RPC).
-2. **Пароль/сессии** — Supabase Auth. Первый вход: одноразовое создание владельца через
-   `vk-ai-api/bootstrap/owner` (публичный маршрут, но работает только пока в `profiles` пусто).
+2. **Пароль/сессии** — Supabase Auth. Новый Supabase first-owner flow требует Edge-only
+   `OWNER_SETUP_SECRET`, закрытого DB latch и операторского `scripts/bootstrap-owner.mjs`;
+   браузерная регистрация отключена. Bootstrap не готов к production до теста миграции и Edge
+   runtime. Никогда не помещать secret во frontend, `VITE_*`, URL или browser storage.
 3. **Контент** генерируется заданиями `generation_jobs`: планировщик создаёт заготовку поста
    (`status = 'generating'`) и задание с идемпотентным ключом
    `gen:<community>:<UTC YYYYMMDDHHMI>:<kind>`. Воркер забирает задание, собирает контекст
@@ -201,12 +205,15 @@ GitHub (исходники)  →  GitHub Actions  →  GitHub Pages (React + Vit
    картинки / времени / сообщества сбрасывает `approved_hash` триггером `app.posts_sync_hash`,
    переводит пост в `review` и принудительно включает `test_mode = true`.
 5. **Планирование** — RPC `schedule_post` (минимум 60 секунд до слота) создаёт задание
-   `publication_jobs`; реальная отправка возможна только при выполнении **трёх** условий
-   одновременно: `app_mode = 'approval'`, `real_publish_enabled = true`, пост не в `test_mode`
-   и одобрение не сброшено. Иначе воркер выполняет симуляцию и ставит `vk_post_id = test_*`.
-6. **Публикация** — воркер (`publish_due`) вызывает VK `wall.post` с `publish_date` (отложенная
-   запись), при ошибке — backoff и повтор; занятые задания захватываются транзакционно
-   (`claim_publication_job`), а `finish_publication_job` фиксирует результат.
+   `publication_jobs`; реальная отправка возможна только при `app_mode = 'approval'`,
+   `real_publish_enabled = true`, активных approval/hash, действующем image, совпавших community,
+   времени и VK Group snapshot, `test_mode = false`, и снятой паузе. Dry-run IDs имеют `test_*`.
+6. **Публикация/отмена** — `claim_publication_job` захватывает job, затем непосредственно перед
+   `wall.post` серверный `begin_publication_dispatch` под блокировками перепроверяет approval и
+   ставит `dispatch_started_at`. После этого неизвестный результат/зависший job становится
+   `unknown` и никогда не переотправляется автоматически; явный retry допускается только после
+   определённой ошибки VK. `wall.delete` вызывается только по запросу владельца; пост считается
+   отменённым лишь после подтверждённого ответа VK и успешной записи в БД.
 7. **Статистика** — задача `stats` собирает метрики по опубликованным постам (`post_statistics`,
    `source = 'vk'`), аналитика строится только из фактических данных, при малом объёме
    показывается `insufficientData`.
@@ -235,6 +242,8 @@ GitHub (исходники)  →  GitHub Actions  →  GitHub Pages (React + Vit
 | `content-engine.ts` | тестовый контент-движок: `Idea`, серии для каждого сообщества, `generateIdea(s)`, `generateText`, `titleForTopic`; **явно помечен как НЕ языковая модель** |
 | `constants.ts` | `COMMUNITY_META`, `STYLE_RULES`, `COMMUNITY_RULE_SETS` v1 (согласованные правила владельца), `DEFAULT_AI_PROVIDERS`, `DEFAULT_AI_PROMPTS`, `APP_LIMITS`, `DEFAULT_APP_SETTINGS`, `DEFAULT_GENERATION`, `DEMO` |
 | `demo-image.ts` | детерминированные SVG-иллюстрации (data URL) для демо-режима и локального стенда |
+| `publication-safety.ts` | сетевые-независимые проверки approval/hash/image, no-duplicate unknown outcomes, stale jobs и cancellation warnings; Node-тесты используют только моки |
+| `bootstrap-safety.ts` | fixed-work comparison для setup/worker secrets; oversized values fail closed, проверяется Node unit test |
 
 > `supabase/functions/_shared/core/*` — **копия** `shared/*`, создаваемая скриптом
 > `node scripts/sync-shared.mjs`. Руками её не править. После любой правки в `shared/`
@@ -265,6 +274,14 @@ GitHub (исходники)  →  GitHub Actions  →  GitHub Pages (React + Vit
 - `migrations/20261014120400_cron.sql` — 6 задач `cron.schedule` + защита: если нет
   vault-секрета `vk_ai_worker_url`/`vk_ai_worker_secret` либо расширения `pg_net`, шаг
   пропускается с записью в `audit_logs`.
+- `migrations/20261014120500_vk_publication_safety.sql` — additive safety migration: dispatch
+  fence, strict job snapshot, ambiguous legacy/remote outcomes, community Group ID guard, explicit
+  remote cancellation state machine, confirmed-only cancellation and stale-job handling. Parser
+  проверяет SQL grammar; миграция не применялась и требует Postgres/Supabase validation.
+- `migrations/20261014120800_owner_bootstrap_safety.sql` — profiles default to `viewer`, Auth
+  trigger cannot self-promote, private/service-role-only one-time bootstrap state and serialized
+  claim/record/complete RPCs; promotion + audit запись атомарны. Parser проверил только внешнюю
+  SQL-грамматику; PL/pgSQL/RLS/transaction runtime не проверялись и миграция не применялась.
 - `functions/_shared/*` — серверное ядро: `env.ts` (все секреты и origin-политика),
   `http.ts` (`ApiError`, CORS, `json`, `errorResponse` с маскировкой `sk-`/`vk1.`/JWT,
   `readJson`, `requireString`, `optionalString`, `assertIso`), `db.ts` (`admin`, `asUser`,
@@ -273,10 +290,11 @@ GitHub (исходники)  →  GitHub Actions  →  GitHub Pages (React + Vit
   `assertVkCompatibleImage` — **отвергает SVG**), `ai.ts` (адаптеры + `paidGuard`/`budgetGuard`),
   `vk.ts` (клиент VK), `jobs.ts` (общие помощники очередей), `context.ts` (правила + персонажи +
   недавние тексты), `references.ts` (только одобренные референсы, 30-минутные signed URL),
-  `publish.ts` (процесс публикации, `collectStatistics`, `markDuePostsPublished`).
+  `publish.ts` (approval/image preflight, dispatch fence, idempotent VK ID persistence, explicit
+  unknown outcome, `wall.delete` cancellation, `collectStatistics`, `markDuePostsPublished`).
 - `functions/vk-ai-api/index.ts` — 34 маршрута в `switch` + 3 вне него (`health`, `setup-state`,
   `bootstrap/owner`): `health/auth`, `integrations/status`, `posts/*` (create, edit, approve,
-  reject, revise, schedule, unschedule, regenerate, generate), `planner/prepare`, `worker/run`,
+  reject, revise, schedule, unschedule (explicit remote delete where applicable), regenerate, generate), `planner/prepare`, `worker/run`,
   `communities/{update,rules,vk-token,vk-check}`, `characters/{update,references,
   references/primary,references/approve,references/delete,readiness}`,
   `ai/ideas`, `settings/{save,ai-key,test-ai,test-worker}`, `media/{upload,sign,delete}`,
@@ -316,8 +334,8 @@ Hono API на `node:sqlite`, порт 8787: `app.ts` (~651 строка, 46 ма
   с кэшем на 50 минут, Realtime на `posts`/`notifications`/`publication_jobs`/`generation_jobs`,
   `waitForGeneration` (по таймауту честно возвращает статус `generating`).
 - `data/index.ts` — `createBackend()` / `getBackend()` / `peekBackend()` / `resetBackend()`.
-- `pages/*` (12 страниц), `components/{ui,layout}.tsx`, `App.tsx` — **пока на `@/lib/api`**,
-  это и есть основная работа этапа 4 (§8).
+- `pages/*` (12 страниц), `components/{ui,layout}.tsx`, `App.tsx` — UI через `getBackend()`;
+  `PostDetailPage` отображает предупреждения из backend и вызывает явный unschedule route.
 
 ### 6.5 Инфраструктура и документация
 
@@ -408,7 +426,8 @@ sha256(
 `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `ENCRYPTION_KEY`
 (AES-256-GCM для VK-токенов и AI-ключа), `WORKER_SECRET` (заголовок `x-worker-secret`),
 `AI_API_KEY` (перекрывает ключ из БД), `AI_BASE_URL`, `AI_TEXT_MODEL`, `AI_IMAGE_MODEL`,
-`VK_API_VERSION` (5.199), `APP_ORIGINS`.
+`VK_API_VERSION` (5.199), `APP_ORIGINS`, `OWNER_SETUP_SECRET` (только server-side, 32–256
+символов; для first-owner CLI оператор вводит тот же secret скрыто).
 Vault: `vk_ai_worker_url`, `vk_ai_worker_secret` (для Cron).
 
 ### 7.7 Storage
@@ -433,132 +452,62 @@ Vault: `vk_ai_worker_url`, `vk_ai_worker_secret` (для Cron).
 
 ---
 
-## 8. Этап 4 — что делать дальше (главная задача)
+## 8. Интерфейс и слой данных
 
-### 8.1 Задача
-
-> **Прогресс (ветка `arena/23498f80-vkbablo`):** переведены оболочка и вход — `src/App.tsx`
-> (гейт через `auth.status()`), `src/components/layout.tsx` (пауза, выход, счётчик непрочитанных
-> через `dashboard()`/`notifications()`, индикатор `backend.label` и пометка «демонстрационные данные»),
-> `src/pages/LoginPage.tsx` (`createOwner`/`signIn`). Переведено 3 из 14 файлов; остальные 11 страниц
-> и `src/data/*` по-прежнему используют `@/lib/api` (в `data/local.ts` и `data/supabase.ts` это ожидаемо
-> для `ApiError`). Проверка в браузере не выполнена (нет Chromium); проверено: typecheck, test, build,
-> sync --check, dev-сервер отдаёт модули.
-
-
-Перевести страницы с прямых вызовов `@/lib/api` на `getBackend()` из `@/data`, **сохранив
-текущий дизайн, разметку, компоненты и UX**. Никаких перерисовок «с нуля».
-
-Файлы, которые сейчас используют `@/lib/api` и подлежат миграции:
-
-```
-src/App.tsx                     (авторизация/гейт маршрутов)
-src/components/layout.tsx       (шапка: пользователь, статус бэкенда, пауза автоматизации)
-src/pages/LoginPage.tsx         (вход + создание владельца)
-src/pages/DashboardPage.tsx
-src/pages/CommunitiesPage.tsx
-src/pages/CommunityDetailPage.tsx
-src/pages/PostsPage.tsx
-src/pages/PostDetailPage.tsx
-src/pages/CalendarPage.tsx
-src/pages/StudioPage.tsx
-src/pages/CharactersPage.tsx
-src/pages/AnalyticsPage.tsx
-src/pages/SettingsPage.tsx
-src/pages/NotificationsPage.tsx
-```
-
-### 8.2 Как это делать
-
-1. Прочитать страницу целиком (`sed -n '1,220p' …`), записать какие эндпоинты/поля она
-   использует, и заменить вызовы на соответствующие методы `Backend`
-   (таблица соответствия ниже).
-2. Проверять поведение сразу в трёх режимах: `VITE_BACKEND_MODE=demo` (по умолчанию без
-   ключей), `local` (локальный стенд `npm run dev`) и — когда появится проект — `supabase`.
-   UI не должен падать, если метод вернул честную ошибку (в демо-режиме часть действий
-   недоступна by design — показывать причину, а не «сломалось»).
-3. Добавить индикатор режима: `backend.label` из `BackendInfo` (`ДЕМО-РЕЖИМ`,
-   `Локальный стенд`, `Supabase`) — владелец должен всегда видеть, где он работает.
-4. Не дублировать логику одобрения на клиенте: клиент только вызывает методы, все инварианты
-   на сервере. Демо-режим повторяет инварианты лишь для наглядности.
-
-Таблица соответствия «старый вызов → метод Backend»:
-
-| Было (`api(...)`) | Стало |
-|---|---|
-| `GET /api/auth/status` | `backend.auth.status()` |
-| `POST /api/auth/setup` | `backend.auth.createOwner(email, password, name)` |
-| `POST /api/auth/login` | `backend.auth.signIn(email, password)` |
-| `POST /api/auth/logout` | `backend.auth.signOut()` |
-| `GET /api/dashboard` | `backend.dashboard()` |
-| `GET /api/communities`, `/:id`, `PATCH` | `communities()`, `community(id)`, `updateCommunity(id, patch)` |
-| `POST /api/communities/:id/vk` | `connectVk(id, token, groupId)` / `checkVk(id)` |
-| `GET /api/posts`, `/:id`, `POST`, `PATCH` | `posts(filters)`, `post(id)`, `createPost`, `editPost` |
-| `/posts/:id/{approve,reject,revise,regenerate,schedule,unschedule,generate}` | `approvePost`, `rejectPost`, `revisePost`, `regeneratePost`, `schedulePost`, `unschedulePost`, `generateSlot` |
-| `GET /api/calendar` | `calendar(from, to)` |
-| `POST /api/ai/ideas`, `/api/ai/generate-slot`, `GET /api/ai/history`, `/api/ai/providers` | `ideas(communityId, count)`, `generateSlot(input)`, `aiHistory()`, `providers()` |
-| `POST /api/automation/{prepare,pause,resume,tick}`, `GET /api/jobs` | `prepareUpcoming()`, `setAutomationPaused(true/false)`, `runWorker(task)`, `jobs()` |
-| `GET/PATCH /api/characters`, `POST /:id/references` | `characters()`, `updateCharacter(id, patch)`, `uploadReference(characterId, file, notes)`, `approveReference`, `setPrimaryReference`, `deleteReference` |
-| `GET /api/analytics` | `analytics()` |
-| `GET/PATCH /api/settings`, `POST /api/settings/test-ai` | `settings()`, `saveSettings(patch)`, `saveAiKey(key)`, `testAi()` |
-| `GET /api/notifications`, `POST /read` | `notifications()`, `markNotificationsRead(id?)` |
-| `GET /api/audit` | `audit()` |
-| `POST /api/uploads` | `uploadMedia(file, folder, context?)` |
-
-### 8.3 Чеклист приёмки этапа 4
-
-- [ ] ни одна страница/компонент больше не импортирует `@/lib/api` (кроме `src/data/local.ts`);
-- [ ] `npx tsc --noEmit` чисто; `npx vite build` собирается;
-- [ ] в демо-режиме (без ключей) интерфейс открывается, данные помечены как демонстрационные,
-      действия VK/платных AI недоступны с понятным объяснением;
-- [ ] индикатор режима виден на iPhone и MacBook, светлая/тёмная темы не сломаны;
-- [ ] в календаре живут ожидаемые и пропущенные слоты, статусы и цвета сообществ;
-- [ ] удалён мёртвый код `postsOn()` в `CalendarPage.tsx` (условие `…includes("")`);
-- [ ] удалён неиспользуемый `DemoPostStorage` в `src/data/demo.ts`, если он не нужен.
-
----
+- Существующие экраны, архитектура и DesignVK визуальный стиль сохраняются; переписывания
+  приложения/редизайна в этом запросе нет.
+- `src/data/*` содержит Supabase/local/demo backends, а страницы работают через `getBackend()`;
+  не возвращать прямые API вызовы ради упрощения.
+- В `PostDetailPage` отмена расписанного поста идёт через `posts/unschedule`. Локальная очередь
+  отменяется отдельно от remote deletion. Если backend не подтвердил VK deletion, UI показывает
+  ошибку/warning и не сообщает «успешно отменено».
+- Ручное одобрение остаётся обязательным; изменение текста, изображения, сообщества или времени
+  сбрасывает одобрение. Экраны одобрения/редактирования не обходить прямыми DB writes.
+- UI на русском; расписание/цвета/четыре сообщества не менять. GitHub Pages работает в hash-router;
+  `npm run build:pages` собирает demo backend без credentials.
 
 ## 9. Что проверено (и как повторить)
 
-| Проверка | Команда | Результат |
+| Проверка | Команда / способ | Результат |
 |---|---|---|
-| Типы фронтенда и сервера | `npm run typecheck` | чисто (обе конфигурации) |
-| Юнит-тесты | `npm test` (или `npx tsx --test server/tests/*.test.ts`) | 11/11 (одобрение + канонический хэш) |
-| Сборка | `npx vite build` | ОК, 341.81 kB / 106.65 kB gzip |
-| Синхронность ядра | `node scripts/sync-shared.mjs --check` | ОК (10 файлов) |
-| Отсутствие секретов | `git diff --cached \| grep -Ei "sk-|vk1\.|eyJ"` | чисто |
-| Локальный стенд вживую | `npm run dev` + curl-сценарий | владелец создан, планировщик поставил 11 заданий, посты в `review`; планирование без одобрения отклонено; после одобрения правка текста сбросила одобрение |
+| Типы frontend + local server | `npm run typecheck` | Успешно: frontend/shared и Node server TypeScript-конфигурации. Deno Edge Functions не входят в эту команду. |
+| Все Node tests | `npm test` | 30 passed, 0 failed; provider/VK transport проверяется только injected mocks, локальная генерация — test adapter. |
+| Production build | `npm run build` | Успешно; JS chunk 725.95 kB minified (Vite предупреждает о чанке >500 kB). |
+| GitHub Pages build | `npm run build:pages` | Успешно; demo backend + hash router; JS chunk 726.03 kB, то же предупреждение. |
+| Supabase Edge static check | `npx --yes deno check supabase/functions/vk-ai-api/index.ts supabase/functions/vk-ai-worker/index.ts` | Успешно для обоих entry points; не заменяет `supabase functions serve` или deployment runtime validation. |
+| Owner CLI syntax | `node --check scripts/bootstrap-owner.mjs` | Успешно; network/credentials not used. |
+| Shared source parity | `node scripts/sync-shared.mjs --check` | ОК после синхронизации: 15 generated core files совпадают; shared core не зависит от Node/Deno/process. |
+| Whitespace/conflict markers | `git diff --check` | Успешно. |
+| VK publication behavior | `server/tests/publication-safety.test.ts` | Mock `wall.delete`, VK-accepted/lost `wall.post` response (один запрос), unknown/repeat-job skips, approval/image guards. |
+| AI provider behavior | `server/tests/ai-safety.test.ts` | Mock chat/image transports, prompt/mode/reference/budget helpers; no external request. |
+| SQL outer grammar | Local `pglast.parse_sql` | 205: 44; 206: 4; 207: 3; 208: 15 statements parsed. PL/pgSQL bodies не исполнялись; миграции не применялись. |
 
-Сценарий смоука локального стенда (повторяемый):
+Повторить полный обязательный набор:
 
 ```bash
-npm run dev &                       # web :5173, api :8787
-J=/tmp/cookies.txt
-curl -s -c $J -H 'origin: http://localhost:5173' -H 'content-type: application/json' \
-  -X POST http://127.0.0.1:8787/api/auth/setup \
-  -d '{"email":"owner@example.com","password":"super-secret-pass","name":"Владелец"}'
-curl -s -b $J -H 'origin: http://localhost:5173' -H 'content-type: application/json' \
-  -X POST http://127.0.0.1:8787/api/automation/prepare -d '{}'
-curl -s -b $J http://127.0.0.1:8787/api/posts
+npm run typecheck
+npm test
+npm run build
+npm run build:pages
+node scripts/sync-shared.mjs --check
+git diff --check
 ```
 
----
+Реальные Supabase/VK/AI аккаунты, секреты, migration apply, внешние запросы и публикации в этой
+проверке не использовались. Не считать SQL parser проверкой миграции на PostgreSQL.
 
 ## 10. Что **НЕ** проверено (нельзя утверждать, что работает)
 
-1. **Миграции Supabase не применялись** — нет ни локального Postgres, ни облачного проекта.
-   Синтаксис/логика RPC, RLS, триггеров и Cron **не проверялись исполнением**.
-2. **Edge Functions не запускались** — ни `deno check`, ни `supabase functions serve`.
-   Возможны мелкие ошибки типов Deno/импортов; проверить при первом подключении проекта.
-3. **Реальные вызовы VK** (отложенная публикация `publish_date`, загрузка фото, права токена,
-   лимиты, статистика) не выполнялись. Лимиты VK не верифицированы.
-4. **Реальные AI-провайдеры** не вызывались. Работал только детерминированный тестовый движок.
-5. **Cron на выбранном тарифе** не проверялся: нужен `pg_cron`, `pg_net` и vault-секреты.
-6. **Realtime-подписки** не проверялись вживую (нет проекта).
-7. **GitHub Pages** пока не разворачивался; workflow публикации отсутствует. Демо-режим
-   работает без сервера по замыслу, но факт деплоя не подтверждён.
-8. **Мобильная вёрстка** проверялась только по коду (дизайн сохранялся), на реальных iPhone
-   и MacBook не проверялась.
+1. **Миграции Supabase не применялись** — нет ни локального PostgreSQL/Supabase, ни подключённого проекта. `pglast` разобрал только внешнюю SQL-грамматику; PL/pgSQL bodies, object names, triggers, RLS и transactions не исполнялись.
+2. **Edge Functions не запускались** в Deno/Supabase runtime. `deno check` для обоих entry points прошёл; `supabase functions serve`, deployment и production runtime не проверялись.
+3. **Реальные VK вызовы** (отложенная публикация, upload, remote delete, права токена, лимиты, статистика) не выполнялись; production retry/cancellation lifecycle не проходил интеграционный тест.
+4. **Реальные AI providers** не вызывались. Prompt/mode/reference/budget code и mock tests добавлены, но provider tariffs, Edge runtime behavior, конкурентное резервирование бюджета и live compatibility не проверялись; paid AI calls должны оставаться выключенными.
+5. **Cron** и тариф Supabase не проверялись; нужны `pg_cron`, `pg_net` и настроенные Vault secrets.
+6. **Realtime** и Supabase Storage/Auth не проверялись вживую; нет проекта и реальных аккаунтов.
+7. **GitHub Pages deployment** не запускался в этой работе. Workflow `.github/workflows/pages.yml` существует, но внешний site/Actions deployment не проверены.
+8. **Мобильная вёрстка** не проверялась на реальных iPhone/MacBook.
+9. **Owner bootstrap**: код и статические проверки добавлены, но миграция `20261014120800`, Edge function и CLI не запускались на Supabase; создание аккаунта не проверено в runtime. До тестирования на разрешённом проекте production Auth не подключать.
+10. `npm audit` имеет ранее выявленные 7 findings (2 moderate, 5 high); автоматический `--force` fix не запускался.
 
 ---
 
@@ -566,7 +515,8 @@ curl -s -b $J http://127.0.0.1:8787/api/posts
 
 1. **Не возвращать** `wrangler.toml`, `server/worker.ts`, `bindWorkerEnv`, черновики
    `supabase/migrations/0001_init.sql`, `supabase/policies.sql`, `supabase/seed.sql`.
-   Канонический набор миграций — только пять файлов `2026101412*`.
+   Базовый набор миграций `2026101412*` дополняется безопасной миграцией
+   `20261014120500_vk_publication_safety.sql`; не переписывать уже применённые миграции.
 2. **Legacy-хэш в `server/lib.ts`** (`JSON.stringify({c,t,i,s})`) был несовместим с
    `app.content_hash`. Теперь функция делегирует в `shared/hash.ts`. Не возвращать старую
    реализацию.
@@ -582,8 +532,8 @@ curl -s -b $J http://127.0.0.1:8787/api/posts
 7. **Адаптер изображений** (`server/ai.ts`) возвращает `{path, model, costUsd, note?}` —
    свойства `prompt` нет, использовать локальный `imgPrompt`. Значения `vk_post_id` и
    `approved_by` из SQLite приводить к `String(...)`.
-8. **SVG**: `assertVkCompatibleImage` не пропускает SVG (демо-иллюстрации — SVG). Для реальной
-   публикации нужен PNG/JPEG/WebP.
+8. **SVG**: демо-иллюстрации SVG нельзя отправлять в VK. Реальная публикация допускает только
+   проверенные PNG/JPEG; отсутствие, недоступность или иной MIME/type блокирует `wall.post`.
 9. **`functions.invoke`** кладёт ошибку в `error.context` (это `Response`), читать через
    `await error.context.json()`; сервер отвечает `{error, code}`.
 10. **Любая правка `shared/*.ts`** требует `node scripts/sync-shared.mjs`, иначе CI падает.
@@ -593,62 +543,53 @@ curl -s -b $J http://127.0.0.1:8787/api/posts
 12. **Мок-идентификаторы**: симуляция VK всегда даёт `vk_post_id` с префиксом `test_`;
     реальная публикация считается только при `vk_post_id` без префикса. Не менять.
 13. **Секреты в чат** не отправлять даже в примерах; в документации — только имена переменных.
+14. **Не повторять `wall.post` при неизвестном исходе.** Любой транспортный сбой/потеря ответа
+    после dispatch fence — `unknown`; требуется ручная проверка VK.
+15. **Не считать локальную отмену remote отменой.** Удаление в VK вызывается отдельным owner action;
+    только `wall.delete` response `1` + успешная фиксация в БД даёт confirmed.
+16. **Не угадывать старый VK Group ID.** Для legacy jobs без сохранённого target snapshot remote
+    delete блокируется и требует ручной сверки; текущая группа не подставляется как доказанный target.
 
 ---
 
-## 12. Оставшиеся задачи по этапам
+## 12. Оставшиеся задачи по текущему запросу
 
-### Этап 4 — интерфейс (см. §8) — главное
-Перевести 12 страниц + `App.tsx` + `layout.tsx` на `getBackend()`, добавить индикатор режима,
-сохранить дизайн и адаптивность, почистить мёртвый код календаря.
+### Block 1 — безопасная публикация/отмена
+Код и mock tests добавлены. Перед production необходимы: Deno/Supabase Edge runtime check;
+локальная PostgreSQL/Supabase migration validation (не production project); ручная review
+SQL lock order, grants, stale/unknown workflows. Не отправлять реальный `wall.post`/`wall.delete`.
 
-### Этап 5 — контент-движок (доработка)
-- вынести промпты в `ai_prompt_templates` и версионировать их (таблица и сиды уже есть);
-- в UI студии показывать: провайдер, модель, стоимость, промпт версии, предупреждения
-  (включая честные ограничения провайдера, например отсутствие identity-lock);
-- лимиты расходов: показывать `spendUsdMonth` / `aiMonthlyLimitUsd` и блокировать генерацию
-  при превышении (сервер уже возвращает ошибку);
-- проверка запрещённых тем и антидубль должны вызываться до постановки в очередь
-  (`shared/rules.ts`, `shared/similarity.ts` уже реализованы).
+### Block 2 — AI prompt, mode, references, budgets — код/моки/static check завершены
+- Общие helper-ы синхронизированы в Deno core: явные режимы и scopes, bounded user prompts,
+  templates, строгие community rules, правдивый reference policy, combined cost preflight.
+- Supabase и local adapters не передают reference images; metadata/warnings не обещают likeness.
+- Paid calls требуют явного server-side `ai_paid_calls_enabled=true` + provider key; defaults off.
+  По тестам используются только injected mocks; `deno check` прошёл, но runtime и тарифы не проверены.
+- Partial text/image regeneration сохраняет нетронутые компоненты, меняет draft на `review` и
+  сбрасывает approval. Прямая генерация не может перезаписать scheduled/published post.
+- Миграция `20261014120600_ai_generation_safety.sql` добавляет cost estimate flag, поправляет
+  reference capabilities и сеет prompt templates. Новая trigger migration `20261014120700...`
+  защищает scheduled/published status; оба SQL-файла не применялись.
 
-### Этап 6 — планировщик (доработка UI + проверка на реальной базе)
-- страница календаря: день/неделя/месяц, цвета сообществ, drag-n-drop и правка времени,
-  статусы, «пропущенные слоты», пауза/возобновление, пропуск дня, массовая подготовка;
-- после подключения Supabase — проверить, что Cron реально вызывает воркер и что задания
-  идемпотентны; проверить восстановление после «зависших» заданий.
+### Block 3 — owner bootstrap (код/docs добавлены; локальные проверки пройдены, commit ожидает)
+- Server-only `OWNER_SETUP_SECRET` длиной 32–256, fixed-work comparison, operator-only CLI,
+  закрытый latch + service-role RPCs, Auth profile default viewer, atomic promotion/audit.
+- Frontend не отправляет setup secret; first-run Supabase UI направляет к CLI.
+- Не запускались реальные Auth аккаунты, миграции, functions deploy или project calls.
+  Unknown outcome / незаписанный Auth ID — fail closed и требует ручной сверки до любого retry.
 
-### Этап 7 — интеграции
-- проверка прав VK-токена (`vk-ai-api/communities/vk-check` уже это умеет) и **актуальных
-  лимитов VK** (в т.ч. `publish_date`, количество запросов, размеры изображений);
-- решить вопрос растровых изображений для публикации (сейчас демо — SVG);
-- адаптеры AI: подтверждённая передача референсов и честная индикация ограничений.
+### Block 4 — setup/handoff/docs (обновлены)
+- `CODEX_SETUP.md`, `.env.example`, `README.md`, `HANDOFF.md` описывают различия local/Supabase,
+  env ownership, безопасный CLI flow, unknown VK/Auth outcomes и ограничения непроверенной миграции.
+- В docs есть final Codex checklist; сохранить без реальных сервисов, секретов и аккаунтов.
 
-### Этап 8 — тестирование
-- интеграционные тесты против тестового проекта Supabase (применение миграций, RLS,
-  попытка одобрить/опубликовать без прав, двойная публикация, сброс одобрения, слоты МСК);
-- тест Cron на выбранном тарифе;
-- тест GitHub Pages (hash-роутинг, отсутствие 404 на вложенных путях);
-- мобильная проверка (iPhone) и MacBook.
-
-### Этап 9 — развёртывание
-- **создать `.github/workflows/deploy-pages.yml`**: build → upload artifact → deploy-pages,
-  `VITE_BASE=/VKBablo/`, `VITE_USE_HASH_ROUTER=true`, публичные ключи из repo variables/secrets,
-  pre-deploy проверки (typecheck/test/build), возможность отката (re-run предыдущего деплоя);
-- **написать `CODEX_SETUP.md`** — пошагово для владельца на macOS: инструменты (Homebrew, Node,
-  GitHub CLI, Supabase CLI), вход в GitHub, клонирование репозитория, создание проекта Supabase,
-  `supabase link`, `supabase db push`, `supabase functions deploy`, секреты, Auth, Storage,
-  Cron + vault-секреты, GitHub Pages, проверка каждого сервиса, включение реального режима,
-  где включается `ai_paid_calls_enabled` и `real_publish_enabled`, и что делать при ошибках;
-- проверить `.env.example` на отсутствие реальных значений (уже так) и добавить раздел про
-  сканирование истории Git на секреты.
-
-### Этап 10 — отчёт
-Обязательно указать: ссылку на GitHub, ссылку на сайт (если развёрнут), что реализовано, что
-проверено, что осталось, `CODEX_SETUP.md`, необходимые тарифы/лимиты Supabase и GitHub,
-и **явное подтверждение**: реальная публикация в VK выключена, платные API не вызываются,
-тестовые данные помечены как тестовые.
-
----
+### Wrap-up
+- Финальные локальные проверки после правок прошли: `npm run typecheck`, `npm test` (30/30),
+  обе сборки, shared parity (15 files), `deno check`, CLI syntax check, pglast outer SQL parse и
+  `git diff --check`. Production/Pages JS chunks 725.95/726.03 kB; Vite warning >500 kB сохранён.
+- Осталось проверить/зафиксировать diff, сформировать отдельные коммиты по блокам и затем push/PR.
+- Push только в `arena/ff5941a8-vkbablo`, открыть PR из этой ветки, не merge. Не просить ключи и не
+  применять миграции к реальному Supabase.
 
 ## 13. Команды
 
@@ -657,8 +598,9 @@ npm install                       # зависимости
 cp .env.example .env              # локальный стенд
 npm run dev                       # web :5173 + api :8787
 npm run typecheck                 # tsc для фронтенда и сервера
-npm test                          # юнит-тесты (approval + hash)
-npx vite build                    # production-сборка
+npm test                          # unit tests, mocks only
+npm run build                     # production-сборка
+npm run build:pages               # GitHub Pages demo-сборка
 node scripts/sync-shared.mjs      # синхронизация ядра в Edge Functions
 node scripts/sync-shared.mjs --check
 npx tsx server/index.ts           # только API локального стенда
@@ -699,8 +641,10 @@ psql "$DATABASE_URL" -f supabase/tests/hash.sql
 
 ## 15. Что должен сделать владелец перед реальным запуском (основа для CODEX_SETUP.md)
 
-1. Создать проект Supabase, связать локальный репозиторий (`supabase link`), применить
-   миграции, развернуть функции, задать секреты; создать владельца при первом входе.
+1. Создать отдельный тестовый Supabase project, изучить/проверить миграции и Edge Functions,
+   задать server secrets, применить миграции и deploy только после отдельного подтверждения.
+   Затем оператор запускает `node scripts/bootstrap-owner.mjs` в интерактивном терминале;
+   browser-based owner creation отключён. При unknown outcome не повторять вслепую.
 2. Проверить интеграции: `integration_status`, `supabase/tests/hash.sql`, Cron (`cron.job`),
    Storage (загрузка и подписанная ссылка), Realtime, Edge Functions (`health`).
 3. Загрузить реальные фото персонажей, одобрить референсы, включить `appearance_status =

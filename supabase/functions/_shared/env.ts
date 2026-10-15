@@ -5,7 +5,10 @@
  */
 
 function read(name: string): string {
-  const value = Deno.env.get(name);
+  const deno = (globalThis as typeof globalThis & {
+    Deno?: { env: { get: (key: string) => string | undefined } };
+  }).Deno;
+  const value = deno?.env.get(name);
   return value === undefined || value === null ? "" : value.trim();
 }
 
@@ -14,6 +17,7 @@ export const SUPABASE_ANON_KEY = read("SUPABASE_ANON_KEY");
 export const SUPABASE_SERVICE_ROLE_KEY = read("SUPABASE_SERVICE_ROLE_KEY");
 export const ENCRYPTION_KEY = read("ENCRYPTION_KEY");
 export const WORKER_SECRET = read("WORKER_SECRET");
+export const OWNER_SETUP_SECRET = read("OWNER_SETUP_SECRET");
 
 export const AI_API_KEY = read("AI_API_KEY");
 export const AI_BASE_URL = read("AI_BASE_URL") || "https://api.openai.com/v1";
@@ -72,6 +76,14 @@ export function configChecks(): ConfigCheck[] {
       label: "Секрет воркера",
       configured: WORKER_SECRET.length >= 16,
       detail: WORKER_SECRET ? "задан" : "WORKER_SECRET не задан — Cron не сможет вызвать воркер",
+    },
+    {
+      key: "owner_setup_secret",
+      label: "Одноразовый секрет первичной настройки владельца",
+      configured: OWNER_SETUP_SECRET.length >= 32 && OWNER_SETUP_SECRET.length <= 256,
+      detail: OWNER_SETUP_SECRET.length >= 32 && OWNER_SETUP_SECRET.length <= 256
+        ? "задан в серверном окружении"
+        : "OWNER_SETUP_SECRET должен содержать 32–256 символов; браузерная регистрация отключена",
     },
     {
       key: "ai",

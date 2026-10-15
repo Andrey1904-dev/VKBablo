@@ -18,6 +18,7 @@ export default function LoginPage({
   const [name, setName] = useState("Андрей");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const supabaseBootstrapRequired = setup && getBackend().info.kind === "supabase";
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -86,46 +87,73 @@ export default function LoginPage({
             <Clock3 size={12} /> 4 сообщества · 12 публикаций в день
           </div>
         </div>
-        <form onSubmit={submit} className="login-card">
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-            <span className="brand-mark">
-              <Command size={18} />
-            </span>
+        {supabaseBootstrapRequired ? (
+          <section className="login-card" aria-labelledby="bootstrap-title">
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+              <span className="brand-mark"><Command size={18} /></span>
+              <div>
+                <h2 id="bootstrap-title">Первичная настройка владельца</h2>
+                <p style={{ margin: "3px 0 0" }}>Браузерная регистрация отключена.</p>
+              </div>
+            </div>
+            <p>
+              Оператор должен выполнить <code>scripts/bootstrap-owner.mjs</code> из CLI после
+              настройки серверного <code>OWNER_SETUP_SECRET</code>. Секрет не вводится на этой
+              странице, не попадает в JavaScript bundle и не передаётся браузером.
+            </p>
+            <p style={{ color: "var(--muted, #9494a3)", fontSize: 12 }}>
+              Инструкции и безопасное восстановление: <code>CODEX_SETUP.md</code>. После создания
+              владельца обновите страницу и войдите через Supabase Auth.
+            </p>
+          </section>
+        ) : (
+          <form onSubmit={submit} className="login-card">
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+              <span className="brand-mark">
+                <Command size={18} />
+              </span>
+              <div>
+                <h2>{setup ? "Создание владельца" : "Вход в панель"}</h2>
+                <p style={{ margin: "3px 0 0" }}>
+                  {setup
+                    ? "Первый запуск. Пароль не короче 10 символов. Ключи API в чат не отправляйте."
+                    : "Закрытая панель. Сессия управляется выбранным сервером авторизации."}
+                </p>
+              </div>
+            </div>
             <div>
-              <h2>{setup ? "Создание владельца" : "Вход в панель"}</h2>
-              <p style={{ margin: "3px 0 0" }}>
-                {setup
-                  ? "Первый запуск. Пароль не короче 10 символов. Ключи API в чат не отправляйте."
-                  : "Закрытая панель. Сессия хранится в httpOnly cookie."}
-              </p>
-            </div>
-          </div>
-          <div>
-            {setup && (
-              <Field label="Имя">
-                <Input value={name} onChange={(e) => setName(e.target.value)} required />
+              {setup && (
+                <Field label="Имя">
+                  <Input value={name} onChange={(e) => setName(e.target.value)} required />
+                </Field>
+              )}
+              <Field label="Email">
+                <Input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  autoComplete="username"
+                />
               </Field>
-            )}
-            <Field label="Email">
-              <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="username" />
-            </Field>
-            <Field label="Пароль">
-              <Input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                autoComplete={setup ? "new-password" : "current-password"}
-              />
-            </Field>
-            {error && <div className="login-error">{error}</div>}
-            <div style={{ marginTop: 16 }}>
-              <Button type="submit" className="full" disabled={pending} style={{ height: 42 }}>
-                {pending ? "Подождите…" : setup ? "Создать аккаунт" : "Войти"}
-              </Button>
+              <Field label="Пароль">
+                <Input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  autoComplete={setup ? "new-password" : "current-password"}
+                />
+              </Field>
+              {error && <div className="login-error">{error}</div>}
+              <div style={{ marginTop: 16 }}>
+                <Button type="submit" className="full" disabled={pending} style={{ height: 42 }}>
+                  {pending ? "Подождите…" : setup ? "Создать аккаунт" : "Войти"}
+                </Button>
+              </div>
             </div>
-          </div>
-        </form>
+          </form>
+        )}
       </div>
     </div>
   );

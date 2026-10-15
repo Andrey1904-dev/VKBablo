@@ -490,8 +490,8 @@ export class SupabaseBackend implements Backend {
         user,
         backend: this.info,
         hints: [
-          "Первый вход: создайте владельца один раз — после этого регистрация закрыта.",
-          "Supabase Auth, RLS и RPC уже включены: браузер не может обойти одобрение публикаций.",
+          "Если владелец ещё не создан, оператор должен выполнить scripts/bootstrap-owner.mjs с CLI и одноразовым серверным секретом; браузерная регистрация отключена.",
+          "После применения миграций облачные операции защищены Supabase Auth, RLS и серверными RPC; одобрение обязательно.",
           "Реальные публикации VK и платные модели выключены, пока владелец не включит их отдельно.",
         ],
       };
@@ -509,16 +509,11 @@ export class SupabaseBackend implements Backend {
       return user;
     },
 
-    createOwner: async (email: string, password: string, name: string): Promise<UserPublic> => {
-      await this.ready;
-      await this.invoke<{ ok: boolean }>("bootstrap/owner", { email, password, name });
-      const { data, error } = await this.client.auth.signInWithPassword({ email, password });
-      if (error) {
-        throw new ApiError(500, "Владелец создан, но вход не выполнился. Войдите вручную.");
-      }
-      const user = await this.profile(data.user.id, data.user.email ?? null);
-      if (!user) throw new ApiError(500, "Профиль владельца не создался (проверьте триггер app.handle_new_user).");
-      return user;
+    createOwner: async (_email: string, _password: string, _name: string): Promise<UserPublic> => {
+      throw new ApiError(
+        403,
+        "Первичный владелец создаётся только CLI-скриптом scripts/bootstrap-owner.mjs. Одноразовый секрет не передаётся через браузер; см. CODEX_SETUP.md.",
+      );
     },
 
     signOut: async (): Promise<void> => {
