@@ -20,6 +20,7 @@ export function getDb(): DatabaseSync {
     db = new DatabaseSync(DB_PATH);
     db.exec("PRAGMA journal_mode = WAL;");
     db.exec("PRAGMA foreign_keys = ON;");
+    db.exec("PRAGMA busy_timeout = 5000;");
     migrate(db);
   }
   return db;
@@ -34,15 +35,46 @@ export function openMemoryDb(): DatabaseSync {
 }
 
 function migrate(database: DatabaseSync) {
-  for (const id of ["0001_init", "0002_jobs_stats"]) {
+  for (const id of ["0001_init", "0002_jobs_stats", "0003_safety_reliability"]) {
     const sqlPath = join(ROOT, "migrations", `${id}.sql`);
     if (!existsSync(sqlPath)) continue;
-    database.exec(readFileSync(sqlPath, "utf8"));
-    database
-      .prepare(
-        "INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)",
-      )
-      .run(id, nowIso());
+
+    const migrationsTableExists = Boolean(
+      database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get(),
+    );
+    if (migrationsTableExists && database.prepare("SELECT 1 FROM schema_migrations WHERE id = ?").get(id)) continue;
+
+    database.exec("BEGIN IMMEDIATE");
+    try {
+      database.exec(readFileSync(sqlPath, "utf8"));
+      database.prepare("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)").run(id, nowIso());
+      database.exec("COMMIT");
+    } catch (error) {
+      try {
+        database.exec("ROLLBACK");
+      } catch {
+        // Preserve the migration error if SQLite already rolled back.
+      }
+      throw error;
+    }
+  }
+}
+
+/** Run a synchronous SQLite transaction that serializes writers across processes. */
+export function withImmediateTransaction<T>(operation: () => T): T {
+  const database = getDb();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const result = operation();
+    database.exec("COMMIT");
+    return result;
+  } catch (error) {
+    try {
+      database.exec("ROLLBACK");
+    } catch {
+      // Preserve the original error.
+    }
+    throw error;
   }
 }
 

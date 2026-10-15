@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { getBackend } from "@/data";
 import { COMMUNITY_META } from "@shared/constants";
-import { Badge, Empty, PageHead, Stat } from "@/components/ui";
+import { Badge, Button, Empty, PageHead, Stat } from "@/components/ui";
 import { CommunityAvatar } from "@/components/layout";
 import { formatMoscow } from "@/lib/time";
 import type { AnalyticsPayload } from "@shared/types";
@@ -23,9 +23,16 @@ function smoothPath(pts: Array<{ x: number; y: number }>): string {
 
 export default function AnalyticsPage() {
   const [data, setData] = useState<AnalyticsPayload | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
   useEffect(() => {
-    getBackend().analytics().then(setData).catch(console.error);
-  }, []);
+    let active = true;
+    setError(null);
+    getBackend().analytics()
+      .then((result) => { if (active) setData(result); })
+      .catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "Не удалось загрузить аналитику"); });
+    return () => { active = false; };
+  }, [retry]);
 
   const series = useMemo(() => {
     if (!data) return [];
@@ -53,7 +60,13 @@ export default function AnalyticsPage() {
   if (!data) {
     return (
       <div className="page enter">
-        <p style={{ color: "var(--muted)", fontSize: 12 }}>Загрузка…</p>
+        <PageHead title="Аналитика" description="Результаты по фактически опубликованным постам." />
+        {error ? (
+          <div className="notice danger" role="alert">
+            <Info size={15} /> <span>{error}</span>
+            <Button variant="secondary" onClick={() => setRetry((value) => value + 1)}>Повторить</Button>
+          </div>
+        ) : <p style={{ color: "var(--muted)", fontSize: 12 }}>Загрузка…</p>}
       </div>
     );
   }

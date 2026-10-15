@@ -1,4 +1,4 @@
-import { all, get, run, setSetting, setting } from "./db.ts";
+import { all, get, run, setSetting, setting, withImmediateTransaction } from "./db.ts";
 import { decrypt, encrypt, nid, nowIso } from "./lib.ts";
 import { generateIdea, generateText, ruleCheck, type Idea } from "./content.ts";
 import { illustrationPrompt, makeIllustration } from "./images.ts";
@@ -107,6 +107,7 @@ async function openaiCompatible(kind: "openai" | "compatible"): Promise<AiAdapte
       const pricePer1kTokensUsd = kind === "openai" ? 0.001 : 0.01;
       const estimatedCost = estimateTextCostUsd(input.system, input.user, kind);
       assertBudget(estimatedCost);
+      const reservationId = reserveAiBudget(estimatedCost);
       let result: Awaited<ReturnType<typeof requestCompatibleText>>;
       try {
         result = await requestCompatibleText({
@@ -127,6 +128,7 @@ async function openaiCompatible(kind: "openai" | "compatible"): Promise<AiAdapte
         try {
           logGeneration({
             communityId: input.communityId,
+            budgetReservationId: reservationId,
             type: "text",
             provider: kind,
             model,
@@ -147,6 +149,7 @@ async function openaiCompatible(kind: "openai" | "compatible"): Promise<AiAdapte
       try {
         logGeneration({
           communityId: input.communityId,
+          budgetReservationId: reservationId,
           type: "text",
           provider: kind,
           model,
@@ -167,6 +170,7 @@ async function openaiCompatible(kind: "openai" | "compatible"): Promise<AiAdapte
       const base = normalizedAiBaseUrl(setting("ai_base_url") || "https://api.openai.com/v1");
       const estimatedCost = estimateImageCostUsd(kind);
       assertBudget(estimatedCost);
+      const reservationId = reserveAiBudget(estimatedCost);
       let bytes: Uint8Array;
       try {
         bytes = await requestCompatibleImage({
@@ -184,6 +188,7 @@ async function openaiCompatible(kind: "openai" | "compatible"): Promise<AiAdapte
         try {
           logGeneration({
             communityId: input.communityId,
+            budgetReservationId: reservationId,
             type: "image",
             provider: kind,
             model,
@@ -212,6 +217,7 @@ async function openaiCompatible(kind: "openai" | "compatible"): Promise<AiAdapte
       try {
         logGeneration({
           communityId: input.communityId,
+          budgetReservationId: reservationId,
           type: "image",
           provider: kind,
           model,
@@ -249,7 +255,9 @@ export function saveAiKey(plain: string | null) {
 export async function getAdapter(): Promise<AiAdapter> {
   const id = (setting("ai_provider", "test") || "test") as AiProviderId;
   if (id === "openai" || id === "compatible") {
-    if (!paidAiCallAllowed(id, setting("ai_paid_calls_enabled", "false").toLowerCase() === "true", Boolean(getAiKey()))) {
+    const paidEnabled = setting("ai_paid_calls_enabled", "false").toLowerCase() === "true" &&
+      setting("app_mode", "test") === "approval";
+    if (!paidAiCallAllowed(id, paidEnabled, Boolean(getAiKey()))) {
       return testAdapter;
     }
     return openaiCompatible(id);
@@ -270,15 +278,54 @@ export function monthSpendUsd(): number {
 
 export function assertBudget(extra = 0) {
   const provider = setting("ai_provider", "test");
-  const enabled = setting("ai_paid_calls_enabled", "false").toLowerCase() === "true";
+  const enabled = setting("ai_paid_calls_enabled", "false").toLowerCase() === "true" &&
+    setting("app_mode", "test") === "approval";
   if (!paidAiCallAllowed(provider, enabled, Boolean(getAiKey()))) return;
   const limit = Number(setting("ai_monthly_limit_usd", "20"));
-  const spend = monthSpendUsd();
-  assertBudgetAvailable(spend, limit, extra);
+  const reserved = get<{ s: number }>(
+    "SELECT COALESCE(SUM(reserved_usd), 0) AS s FROM ai_budget_reservations WHERE status = 'reserved' AND month_start = ?",
+    utcMonthStart(),
+  );
+  assertBudgetAvailable(monthSpendUsd() + Number(reserved?.s ?? 0), limit, extra);
 }
 
-export function logGeneration(row: {
+function utcMonthStart(date = new Date()): string {
+  const start = new Date(date);
+  start.setUTCDate(1);
+  start.setUTCHours(0, 0, 0, 0);
+  return start.toISOString();
+}
+
+export function reserveAiBudget(estimatedUsd: number): string {
+  if (!Number.isFinite(estimatedUsd) || estimatedUsd <= 0) {
+    throw new Error("Неверная сумма AI-бюджета; платный вызов заблокирован.");
+  }
+  const id = nid("budget");
+  const monthStart = utcMonthStart();
+  withImmediateTransaction(() => {
+    const limit = Number(setting("ai_monthly_limit_usd", "20"));
+    const active = get<{ s: number }>(
+      "SELECT COALESCE(SUM(reserved_usd), 0) AS s FROM ai_budget_reservations WHERE status = 'reserved' AND month_start = ?",
+      monthStart,
+    );
+    assertBudgetAvailable(monthSpendUsd() + Number(active?.s ?? 0), limit, estimatedUsd);
+    run(
+      `INSERT INTO ai_budget_reservations (id, month_start, reserved_usd, actual_usd, status, created_at)
+       VALUES (?, ?, ?, 0, 'reserved', ?)`,
+      id,
+      monthStart,
+      estimatedUsd,
+      nowIso(),
+    );
+  });
+  return id;
+}
+
+type GenerationLogInput = {
   communityId?: string | null;
+  postId?: string | null;
+  jobId?: string | null;
+  budgetReservationId?: string | null;
   type: string;
   provider: string;
   model: string;
@@ -287,10 +334,12 @@ export function logGeneration(row: {
   costUsd: number;
   status: string;
   error?: string;
-}) {
+};
+
+function insertGenerationLog(row: GenerationLogInput, reservationId?: string | null) {
   run(
-    `INSERT INTO ai_generations (id, community_id, type, provider, model, prompt, result, cost_usd, status, error, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO ai_generations (id, community_id, type, provider, model, prompt, result, cost_usd, status, error, created_at, budget_reservation_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     nid("gen"),
     row.communityId ?? null,
     row.type,
@@ -302,7 +351,51 @@ export function logGeneration(row: {
     row.status,
     row.error ?? null,
     nowIso(),
+    reservationId ?? null,
   );
+}
+
+/** Atomically turn a reservation into a cost row; a retry cannot double-charge the ledger. */
+export function settleAiBudget(reservationId: string, row: GenerationLogInput): void {
+  if (!Number.isFinite(row.costUsd) || row.costUsd < 0) {
+    throw new Error("Не удалось записать корректную стоимость AI; резерв бюджета сохранён.");
+  }
+  withImmediateTransaction(() => {
+    const reservation = get<{ status: string }>(
+      "SELECT status FROM ai_budget_reservations WHERE id = ?",
+      reservationId,
+    );
+    if (!reservation) throw new Error("Резерв AI-бюджета не найден; резерв не освобождён.");
+    if (reservation.status === "settled") return;
+    if (reservation.status !== "reserved") throw new Error("Резерв AI-бюджета уже закрыт.");
+
+    insertGenerationLog(row, reservationId);
+    run(
+      "UPDATE ai_budget_reservations SET status = 'settled', actual_usd = ?, resolved_at = ? WHERE id = ? AND status = 'reserved'",
+      row.costUsd,
+      nowIso(),
+      reservationId,
+    );
+  });
+}
+
+/** Only for a reservation proven not to have reached a paid provider (tests/operator recovery). */
+export function releaseAiBudget(reservationId: string): void {
+  withImmediateTransaction(() => {
+    run(
+      "UPDATE ai_budget_reservations SET status = 'released', resolved_at = ? WHERE id = ? AND status = 'reserved'",
+      nowIso(),
+      reservationId,
+    );
+  });
+}
+
+export function logGeneration(row: GenerationLogInput) {
+  if (row.budgetReservationId) {
+    settleAiBudget(row.budgetReservationId, row);
+    return;
+  }
+  insertGenerationLog(row);
 }
 
 export { generateIdea, generateText, ruleCheck, illustrationPrompt, findSimilar };

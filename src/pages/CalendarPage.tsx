@@ -66,6 +66,8 @@ export default function CalendarPage() {
   const [anchor, setAnchor] = useState(new Date());
   const [community, setCommunity] = useState("");
   const [data, setData] = useState<CalendarPayload | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
   const today = moscowParts().dateStr;
 
   useEffect(() => {
@@ -85,8 +87,13 @@ export default function CalendarPage() {
       from = moscowSlotIso(gridStart, "00:00");
       to = moscowSlotIso(addDays(gridStart, 41), "23:59");
     }
-    getBackend().calendar(from, to).then(setData).catch(console.error);
-  }, [anchor, view]);
+    let active = true;
+    setError(null);
+    getBackend().calendar(from, to)
+      .then((result) => { if (active) setData(result); })
+      .catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "Не удалось загрузить календарь"); });
+    return () => { active = false; };
+  }, [anchor, view, retry]);
 
   const posts = useMemo(
     () => (data?.posts ?? []).filter((p) => !community || p.communityId === community),
@@ -120,6 +127,20 @@ export default function CalendarPage() {
 
   const dayPosts = byDay.get(dateStrOf(anchor)) ?? [];
 
+  if (!data) {
+    return (
+      <div className="page enter">
+        <PageHead title="Календарь" description="Время московское; данные загружаются с backend." />
+        {error ? (
+          <div className="notice danger" role="alert">
+            <AlertCircle size={15} /> <span>{error}</span>
+            <Button variant="secondary" onClick={() => setRetry((value) => value + 1)}>Повторить</Button>
+          </div>
+        ) : <p style={{ color: "var(--muted)", fontSize: 12 }}>Загрузка…</p>}
+      </div>
+    );
+  }
+
   return (
     <div className="page enter">
       <PageHead
@@ -131,6 +152,13 @@ export default function CalendarPage() {
           </Button>
         }
       />
+
+      {error && (
+        <div className="notice danger" role="alert" style={{ marginBottom: 12 }}>
+          <AlertCircle size={15} /> <span>Не удалось обновить диапазон: {error}</span>
+          <Button variant="secondary" onClick={() => setRetry((value) => value + 1)}>Повторить</Button>
+        </div>
+      )}
 
       <div className="calendar-toolbar">
         <div className="segmented">

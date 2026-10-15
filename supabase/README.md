@@ -16,6 +16,8 @@ supabase/
   functions/vk-ai-api/         авторизованный API (все изменения: RPC + серверные инварианты)
   functions/vk-ai-worker/      воркер очередей (Cron, секрет x-worker-secret)
   tests/hash.sql               проверка совпадения хэша PostgreSQL и JS (одобрение версий)
+  tests/ai_budget.sql          rollbackable SQL checks резервирования/settlement (не замена PostgreSQL concurrency test)
+  tests/schedule_sync.sql      rollbackable SQL checks синхронизации слотов и статуса сообщества
 ```
 
 ## Миграции (порядок применения)
@@ -27,6 +29,12 @@ supabase/
 | `20261014120200_rpc_functions.sql` | RPC: одобрение, сброс одобрения, планирование, очереди, персонажи, настройки, аналитика |
 | `20261014120300_seed.sql` | четыре сообщества, слоты 13:30/17:30/21:30 МСК, правила v1 и история, персонажи-заглушки, провайдеры, предохранители OFF |
 | `20261014120400_cron.sql` | расписание Cron через `pg_cron` + `pg_net`: тик воркера, планировщик, публикация, статистика, обслуживание, повтор зависших задач |
+| `20261014120500_vk_publication_safety.sql` | DB fence до `wall.post`, unknown-result quarantine, remote cancellation lifecycle |
+| `20261014120600_ai_generation_safety.sql` | AI prompts, reference capability, cost metadata; paid calls off |
+| `20261014120700_generation_mode_safety.sql` | строгие generation scopes и test-mode safeguards |
+| `20261014120800_owner_bootstrap_safety.sql` | one-time server-only owner bootstrap state/role promotion |
+| `20261015100000_ai_budget_reservations.sql` | UTC-month budget row lock, atomic reserve/settle/release, ledger idempotency |
+| `20261015101000_schedule_sync_safety.sql` | schedule slot edits preserve independent community pause; pause transitions still sync |
 
 Применение (после `supabase link --project-ref <ref>`):
 
@@ -46,7 +54,9 @@ supabase functions deploy vk-ai-worker
 - Задания очередей идемпотентны (`idempotency_key`), захватываются одной транзакцией с блокировкой строки.
 - Реальная публикация требует сразу трёх условий: `app_mode = approval`, `real_publish_enabled = true`
   и непрерванного одобрения конкретной версии; иначе отправка выполняется как симуляция с префиксом `test_`.
-- Платные вызовы AI выключены, пока `ai_paid_calls_enabled = false`; лимит расходов — `ai_monthly_limit_usd`.
+- Платные вызовы AI выключены, пока `ai_paid_calls_enabled = false` или `app_mode = test`; `reserve_ai_budget` дополнительно блокирует их в dry-run.
+- Каждый paid request сначала резервирует консервативную оценку в `app.ai_budget_reservations` под транзакционной блокировкой строки месяца. Успех/ошибка записывается через `settle_ai_budget` и `ai_generations` в одной транзакции; повтор settlement идемпотентен.
+- Если worker теряет соединение после возможного внешнего вызова, резерв остаётся активным и продолжает занимать лимит. Не освобождать его автоматически по timeout; сначала сверить стоимость с провайдером. Стоимость всё равно является оценкой, не provider invoice.
 
 ## Секреты Edge Functions
 
@@ -83,7 +93,10 @@ Vault-секреты для Cron: `vk_ai_worker_url` (URL функции вор�
 ## Проверка после подключения
 
 1. `select * from public.integration_status;` — статусы сервисов.
-2. `select app.content_hash('stories','Тест', null, now());` и `psql -f supabase/tests/hash.sql` — хэш совпадает с JS.
-3. `select proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' order by 1;` — список RPC.
-4. `select jobname, schedule, active from cron.job;` — задачи Cron зарегистрированы.
-5. В интерфейсе: Настройки → «Проверить AI», «Проверить воркер», «Проверить подключение» по каждому сервису.
+2. `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/hash.sql` — hash JS/SQL совпадает; это исполнять на подключённом PostgreSQL.
+3. `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/ai_budget.sql` — rollbackable reservation/settlement checks.
+4. Для конкурентного теста двух PostgreSQL connections см. `npm run test:ai-budget-concurrency` и его обязательный guard `VKBABLO_DISPOSABLE_DB_CONFIRM=I_UNDERSTAND`. Запускать только на отдельной disposable БД; HTTP к AI/VK не выполняется.
+5. `select tablename, rowsecurity from pg_tables where schemaname='public' order by 1;` — проверить включённость RLS на пользовательских таблицах.
+6. `select jobname, schedule, active from cron.job;` — задачи Cron зарегистрированы.
+7. Read-only worker health должен вернуть `{ok:true, queueTouched:false}`; он не запускает планировщик и генерацию.
+8. В интерфейсе: проверить Auth, Storage, approval, отмену, очередь и сухой worker. «Проверить AI» в `app_mode=test` должен использовать test adapter и не вызывать платный endpoint.

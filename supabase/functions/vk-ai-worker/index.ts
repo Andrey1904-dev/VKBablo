@@ -12,6 +12,7 @@ import { admin, callRpc } from "../_shared/db.ts";
 import { errorResponse, json, preflight } from "../_shared/http.ts";
 import { WORKER_SECRET } from "../_shared/env.ts";
 import { constantTimeTextEqual } from "../_shared/core/bootstrap-safety.ts";
+import { isWorkerTask, shouldProcessWorkerQueue, type WorkerTask } from "../_shared/core/worker-safety.ts";
 import { runGenerationJob, type GenerationJob } from "../_shared/jobs.ts";
 import { collectStatistics, markDuePostsPublished, processPublicationJobs } from "../_shared/publish.ts";
 
@@ -19,7 +20,7 @@ const MAX_RUNTIME_MS = 45_000;
 const MAX_JOBS_PER_RUN = 2;
 
 interface WorkerRequest {
-  task?: "tick" | "planner" | "publish_due" | "stats" | "health";
+  task?: WorkerTask;
   source?: string;
 }
 
@@ -71,7 +72,14 @@ async function runGenerationQueue(workerId: string) {
   return summary;
 }
 
-async function handle(task: string, workerId: string) {
+async function handle(task: WorkerTask, workerId: string) {
+  if (task === "health") {
+    const { error } = await admin().from("application_settings").select("key").limit(1);
+    if (error) throw new Error(`Worker health DB check failed: ${error.message}`);
+    return { task, ok: true, database: "reachable", queueTouched: false };
+  }
+  if (!shouldProcessWorkerQueue(task)) throw new Error(`Unsupported worker task: ${task}`);
+
   const requeued = await callRpc(admin(), "requeue_stale_jobs", { p_stale_seconds: 600 });
   const publishSettings = (await callRpc<Record<string, unknown>>(admin(), "get_settings")) as {
     automationPaused?: boolean;
@@ -96,13 +104,14 @@ async function handle(task: string, workerId: string) {
       const stats = await collectStatistics(10);
       return { task, requeued, stats };
     }
-    case "tick":
-    default: {
+    case "tick": {
       const queued = await callRpc(admin(), "enqueue_upcoming_generations", { p_hours: null });
       const generation = await runGenerationQueue(workerId);
       const published = await markDuePostsPublished(10);
       return { task: "tick", requeued, queued, generation, published };
     }
+    default:
+      throw new Error(`Unsupported queue task: ${task}`);
   }
 }
 
@@ -117,7 +126,9 @@ Deno.serve(async (req: Request) => {
     }
 
     const body = req.method === "POST" ? ((await req.json().catch(() => ({}))) as WorkerRequest) : {};
-    const task = body.task ?? "tick";
+    const taskValue: unknown = body.task ?? "tick";
+    if (!isWorkerTask(taskValue)) return json({ error: "Неизвестный тип задания worker" }, 400, origin);
+    const task = taskValue;
     const workerId = `worker-${task}-${Date.now()}`;
 
     const started = Date.now();

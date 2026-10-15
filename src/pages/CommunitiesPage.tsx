@@ -2,18 +2,29 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { getBackend } from "@/data";
 import { Badge, Button, PageHead } from "@/components/ui";
-import { ChevronRight } from "lucide-react";
+import { AlertCircle, ChevronRight } from "lucide-react";
 import type { Community, DashboardData } from "@shared/types";
 
 export default function CommunitiesPage() {
   const [items, setItems] = useState<Community[]>([]);
   const [dash, setDash] = useState<DashboardData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [dashboardError, setDashboardError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
 
   useEffect(() => {
+    let active = true;
     const b = getBackend();
-    b.communities().then(setItems).catch(console.error);
-    b.dashboard().then(setDash).catch(() => setDash(null));
-  }, []);
+    setError(null);
+    setDashboardError(null);
+    b.communities()
+      .then((result) => { if (active) setItems(result); })
+      .catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "Не удалось загрузить сообщества"); });
+    b.dashboard()
+      .then((result) => { if (active) setDash(result); })
+      .catch((reason) => { if (active) { setDash(null); setDashboardError(reason instanceof Error ? reason.message : "Не удалось загрузить счётчики"); } });
+    return () => { active = false; };
+  }, [retry]);
 
   return (
     <div className="page enter">
@@ -21,6 +32,14 @@ export default function CommunitiesPage() {
         title="Сообщества"
         description="Контент, расписания и настройки подключённых сообществ."
       />
+      {(error || dashboardError) && (
+        <div className="notice danger" role="alert" style={{ marginBottom: 12 }}>
+          <AlertCircle size={15} />
+          <span>{error ? `Сообщества не загружены: ${error}` : `Счётчики не обновлены: ${dashboardError}`}</span>
+          <Button variant="secondary" onClick={() => setRetry((value) => value + 1)}>Повторить</Button>
+        </div>
+      )}
+      {!error && items.length === 0 && <div className="notice">Сообщества пока не загружены.</div>}
       <div className="community-grid">
         {items.map((c) => {
           const stats = dash?.byCommunity.find((x) => x.id === c.id);

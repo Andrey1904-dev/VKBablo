@@ -29,6 +29,7 @@ import type { Idea } from "./content.ts";
 import { makeIllustration } from "./images.ts";
 import { audit, notify } from "./notify.ts";
 import { getVk, communityToken } from "./vk.ts";
+import { isRemoteVkPostId } from "../shared/publication-safety.ts";
 
 interface PostRow {
   id: string;
@@ -208,6 +209,8 @@ export async function generateForSlot(opts: {
   scheduledAt: string;
   userId?: number | null;
   force?: boolean;
+  /** Queue retry may resume only a stale/failed generation, never a review/approved post. */
+  retryInterrupted?: boolean;
   kind?: "full_post" | "text" | "image" | "idea" | "preview";
   prompt?: string;
 }): Promise<Post> {
@@ -216,9 +219,9 @@ export async function generateForSlot(opts: {
     opts.communityId,
     opts.scheduledAt,
   );
-  if (existingRow && !opts.force) return mapPost(existingRow);
-  if (existingRow && ["approved", "scheduled", "published"].includes(existingRow.status) && !opts.force) {
-    return mapPost(existingRow);
+  if (existingRow && !opts.force) {
+    const recoverable = opts.retryInterrupted && ["generating", "error"].includes(existingRow.status);
+    if (!recoverable) return mapPost(existingRow);
   }
 
   if (existingRow && ["scheduled", "published"].includes(existingRow.status)) {
@@ -783,6 +786,9 @@ ${post.text}`;
 export async function scheduleToVk(id: string, userId: number | null): Promise<Post> {
   const p = getPost(id);
   assertApprovedVersion(p);
+  if (setting("app_mode", "test") === "approval") {
+    throw new HttpError(501, "Локальный Node/SQLite backend не выполняет реальные публикации. Подключите Supabase Edge Worker.");
+  }
   if (setting("automation_paused", "0") === "1") {
     throw new HttpError(423, "Автоматизация на паузе");
   }
@@ -869,6 +875,54 @@ export async function scheduleToVk(id: string, userId: number | null): Promise<P
     });
     throw e;
   }
+}
+
+export function unscheduleLocalPost(id: string, userId: number | null, reason = ""): Post {
+  const post = getPost(id);
+  if (post.status !== "scheduled") {
+    throw new HttpError(409, "Снять с расписания можно только запланированную публикацию");
+  }
+  if (isRemoteVkPostId(post.vkPostId)) {
+    throw new HttpError(409, "У этого поста есть реальный VK ID. Локальный backend не выполняет wall.delete; проверьте VK вручную.");
+  }
+
+  const key = `pub:${post.id}:${post.approvedHash ?? ""}`;
+  const job = get<{ id: string; status: string; vk_post_id: string | null }>(
+    "SELECT id, status, vk_post_id FROM publication_jobs WHERE idempotency_key = ?",
+    key,
+  );
+  if (job && isRemoteVkPostId(job.vk_post_id)) {
+    throw new HttpError(409, "У задания сохранён реальный VK ID. Отмена не подтверждена; проверьте VK вручную.");
+  }
+  if (job && ["running", "unknown"].includes(job.status)) {
+    throw new HttpError(409, "Результат задания неоднозначен; локально гарантированно отменить его нельзя.");
+  }
+
+  const status = post.approvedHash && post.approvedHash === post.contentHash ? "approved" : "review";
+  const now = nowIso();
+  if (job) {
+    run(
+      "UPDATE publication_jobs SET status = 'cancelled', vk_post_id = NULL, last_error = ?, updated_at = ? WHERE id = ? AND (vk_post_id IS NULL OR substr(vk_post_id, 1, 5) = 'test_')",
+      reason.trim() || "отменено владельцем",
+      now,
+      job.id,
+    );
+  }
+  run(
+    `UPDATE posts SET status = ?, vk_post_id = NULL, published_at = NULL, error_message = NULL, updated_at = ?
+      WHERE id = ? AND status = 'scheduled'`,
+    status,
+    now,
+    id,
+  );
+  audit({ userId, action: "unschedule_local", entityType: "post", entityId: id, details: { reason } });
+  notify({
+    type: "system",
+    title: "Тестовое планирование отменено",
+    message: `Пост «${post.title || post.topic}» снят с локального dry-run расписания. VK не вызывался.`,
+    link: `/posts/${id}`,
+  });
+  return getPost(id);
 }
 
 export function markPublishedIfDue() {

@@ -1,45 +1,56 @@
 # VK AI Manager — передача проекта (handoff для следующего агента)
 
 Документ обновляется вместе с кодом. Текущая рабочая ветка Arena —
-`arena/ff5941a8-vkbablo`; ориентируйтесь на `git status`/`git log`, а не на старые номера
-веток и коммитов, оставшиеся в исторических разделах ниже. Дата последней проверки: 15 октября 2026.
+`arena/a5adadd9-vkbablo`, основание — merge-коммит `317e660` (PR #10 уже вошёл в main).
+Не переключать ветку и не переписывать пять изменений PR #10. Дата обновления: 15 октября 2026.
 
 Читать ограничения и актуальный статус до правок. Всё, что не отмечено как проверенное, —
 **не проверено** и не должно называться работающим.
 
-## 0. Сводка для быстрого старта
+## 0. Актуальная сводка для быстрого старта
 
-1. Архитектура сохранена: React + TypeScript + Vite, Supabase (Postgres/RLS/Auth/Storage/Edge
-   Functions/Cron), отдельные local/demo режимы; Cloudflare не используется.
-2. Облачный контур не подключён: миграции не применялись, Edge Functions не деплоились,
-   реальных секретов/аккаунтов нет; реальные VK-посты и платные AI-вызовы не выполнялись.
-3. Блок безопасности публикации реализован в коде: БД-фенс перед `wall.post`, неизвестный
-   результат не переотправляется автоматически, строгая проверка одобрения/изображения,
-   подтверждённая удалённая отмена `wall.delete`, безопасная stale-job обработка.
-4. Добавлены миграции `20261014120500_vk_publication_safety.sql`,
-   `20261014120600_ai_generation_safety.sql`, `20261014120700_generation_mode_safety.sql` и
-   `20261014120800_owner_bootstrap_safety.sql`; ни одна не применялась и все требуют
-   PostgreSQL/Supabase-проверки.
-5. AI generation paths обновлены: явные режимы, prompt templates/пользовательские подсказки,
-   правдивая reference capability, mock-only transport tests, combined/component budget preflight;
-   paid calls выключены по умолчанию. Конкурентный расход между несколькими workers не атомарно
-   зарезервирован — не включать paid calls до отдельного решения и проверки.
-6. Локально проверено: `npm test` — 30/30, `npm run typecheck`, `npm run build`,
-   `npm run build:pages`, `sync-shared --check`, `deno check`, `node --check scripts/bootstrap-owner.mjs`,
-   pglast outer grammar и `git diff --check` прошли. Vite сообщает JS chunk около 726 kB >500 kB.
-   Deno check/SQL parse не заменяют Edge runtime/DB execution; миграции не исполнялись.
-7. Owner-bootstrap server-only flow, CLI, migration и docs добавлены; реальные сервисы,
-   аккаунты, миграции и функции не запускались. Блоки закоммичены (`57c6794`, `b5fe96c`,
-   `851ae49`) и pushed в текущую ветку. PR #10 открыт против `main`; не сливать без отдельного указания.
-8. Сохранять обязательное ручное одобрение каждого поста; изменение текста, изображения,
-   сообщества или времени сбрасывает одобрение. Не включать реальные публикации или платные AI.
-9. Сохранить четыре сообщества и расписание: «Ну и история», «Милана и её деревенский
-   гламур», «ВСЯ СУТЬ ЖИЗНИ», «Вероника в поиске настоящего мужчины»; 13:30 / 17:30 / 21:30,
-   Europe/Moscow, 12 постов/день.
-10. Выполнять `npm run typecheck`, `npm test`, `npm run build`, `npm run build:pages` и
-    документировать фактический результат; все сервисные проверки только с моками.
-11. Выполнены отдельные коммиты по блокам, push только в текущую ветку и открыт PR #10 без merge.
-    Не сливать PR без отдельного указания пользователя.
+1. Стек прежний: React + TypeScript + Vite; production-контур Supabase (Postgres/RLS/Auth/
+   Storage/Edge Functions/Cron), отдельные local/demo режимы. Cloudflare не используется.
+2. Ни Supabase-проект, ни миграции/функции, ни VK/AI ключи здесь не подключались. Реальные
+   публикации, аккаунты и платные API-вызовы не выполнялись. PostgreSQL integration не выполнен.
+3. Обязательное ручное одобрение остаётся инвариантом. Supabase-публикация защищена DB fence,
+   хэшем одобренной версии, безопасной обработкой unknown результата и подтверждённым cancel.
+   Local backend теперь принудительно test/dry-run; не использовать его для live VK.
+4. `20261015100000_ai_budget_reservations.sql` добавляет транзакционный бюджет: месячная строка
+   блокируется `FOR UPDATE`, paid request резервирует оценку заранее, settlement атомарно пишет
+   `ai_generations`; неизвестный исход оставляет резерв занятым. SQLite tests и SQL fixture на
+   минимальной PGlite-схеме прошли, но полный PostgreSQL migration/concurrency test не запускался;
+   paid AI не включать до disposable PostgreSQL проверки.
+5. `20261015101000_schedule_sync_safety.sql` сохраняет независимую паузу сообщества при простом
+   редактировании слотов; `schedules.slots` по-прежнему синхронизируется в `communities.schedule`.
+   `supabase/tests/schedule_sync.sql` и trigger прошли в изолированном PGlite fixture; полный
+   PostgreSQL/Supabase migration run не выполнялся.
+6. Автоматическая подготовка постов в коде существует условно: SQL planner добавляет задания
+   `full_post` для будущих слотов, Edge worker генерирует draft в статус `review`. Это не
+   автопубликация и не подтверждение; каждый текст/картинку владелец одобряет вручную. Работа
+   требует активных Cron, Edge secrets и базы. Без них автоматизация не работает.
+7. Исправлены локальные сценарии: first-owner latch под SQLite lock, отмена dry-run расписания,
+   восстановление stale worker jobs, durable claim, ссылки approve/select для референсов,
+   валидация upload до чтения в память. Re-upload создаёт UUID-путь и `upsert=false`.
+8. GitHub Pages workflow теперь оставляет demo для browser smoke, но может собрать deployment
+   в Supabase backend из публичных GitHub Actions variables `VITE_SUPABASE_URL` и
+   `VITE_SUPABASE_ANON_KEY`. На текущей машине эти variables не заданы; это не подтверждает
+   реальное облачное подключение.
+9. Четыре сообщества и расписание остаются неизменными: 13:30 / 17:30 / 21:30 `Europe/Moscow`;
+   12 заданий в сутки. Подготовка по расписанию — не гарантия ровно 12 успешных материалов,
+   если воркер/бюджет/провайдер остановлен или слот уже занят/ошибочен.
+10. `AUDIT_REPORT.md` содержит актуальную матрицу P0/P1/P2 и Codex next steps. Проверки этой
+    копии: typecheck PASS, unit tests 41/41, обе сборки PASS, shared sync PASS (16 files), pglast
+    outer-grammar parse всех 14 SQL файлов PASS, AI budget и schedule SQL fixtures на PGlite PASS,
+    Deno static check обоих Edge entry points PASS. Bundle warning 730.09/730.17 kB. Полный
+    PostgreSQL/Supabase, AI concurrency, RLS/Auth/Edge runtime не проверялись; psql/DB отсутствуют.
+    Browser smoke заблокирован отсутствующими Chromium/WebKit.
+11. Не включать live VK/paid AI и не создавать production owner без отдельного разрешения. Повторить
+    `git diff --check` и перечисленные команды после следующих изменений; результаты фиксировать честно.
+12. PR #10 — уже слитая база. Аудит отправляется из `arena/a5adadd9-vkbablo` в PR #11 против
+    `main`; PR открыт и не объединён. Последний GitHub check `test` прошёл. Не force-push и не
+    merge без отдельного разрешения.
+
 
 ---
 
@@ -176,9 +187,9 @@ GitHub (исходники)  →  GitHub Actions  →  GitHub Pages (React + Vit
 | 3 | БД + безопасность | 🟡 код есть, не применён | Добавлены миграции `20261014120500`–`20261014120800`, включая viewer-by-default profiles и закрытый one-time owner latch; ни одна не применялась. PL/pgSQL/trigger/RLS-пути требуют PostgreSQL/Supabase-проверки. |
 | 4 | Интерфейс / слой данных | ✅ код есть | `src/data/*`, hash-router, существующие страницы и дизайн сохранены; безопасная отмена в `PostDetailPage`; `npm run build` и `npm run build:pages` проходят. |
 | 5 | AI/content | 🟡 код + mock tests | Явные generation modes, безопасные prompt templates, точная маркировка reference support, combined cost preflight, test/mock default, paid calls off; Edge runtime и реальные провайдеры не проверялись. |
-| 6 | Планировщик / публикация | 🟡 код есть, внешне не проверен | Добавлены dispatch fence, no-duplicate unknown outcome, required-image/approval guards, cancellation lifecycle и защита от генерации поверх scheduled/published. `deno check` проходит; PostgreSQL/Supabase runtime не проверен. |
+| 6 | Планировщик / публикация | 🟡 код есть, внешне не проверен | Добавлены dispatch fence, no-duplicate unknown outcome, required-image/approval guards, cancellation lifecycle и защита от генерации поверх scheduled/published. `deno check` PASS; PostgreSQL/Supabase runtime не проверен. |
 | 7 | VK + AI интеграции | 🟡 mock-only | Все тесты используют injected mocks/deterministic local engine. Реальные VK/AI вызовы и тарифы не проверялись. |
-| 8 | Тестирование | 🟡 локально проверено | Результаты актуальных команд — §9; все provider/VK tests используют моки. Edge/Deno static check прошёл; migration execution, реальные сервисы и runtime остаются вне проверки. |
+| 8 | Тестирование | 🟡 локально проверено | Результаты актуальных команд — §9; provider/VK tests используют моки, `deno check` прошёл статически. Полное migration execution, реальные сервисы и Edge runtime остаются вне проверки. |
 | 9 | Setup / deploy | 🟡 код и docs готовы, live setup не выполнялся | Добавлены server-only `OWNER_SETUP_SECRET`, one-time DB latch/RPCs, operator CLI и инструкции; миграции не применялись, Edge Functions не деплоились, реальный owner/Auth account не создавался. |
 | 10 | Итоговый handoff | 🟡 локально обновлён | `CODEX_SETUP.md`, `.env.example`, `README.md` и этот handoff описывают безопасный bootstrap; финальные локальные проверки и актуальные итоги записаны в §9. |
 
@@ -471,16 +482,19 @@ Vault: `vk_ai_worker_url`, `vk_ai_worker_secret` (для Cron).
 | Проверка | Команда / способ | Результат |
 |---|---|---|
 | Типы frontend + local server | `npm run typecheck` | Успешно: frontend/shared и Node server TypeScript-конфигурации. Deno Edge Functions не входят в эту команду. |
-| Все Node tests | `npm test` | 30 passed, 0 failed; provider/VK transport проверяется только injected mocks, локальная генерация — test adapter. |
-| Production build | `npm run build` | Успешно; JS chunk 725.95 kB minified (Vite предупреждает о чанке >500 kB). |
-| GitHub Pages build | `npm run build:pages` | Успешно; demo backend + hash router; JS chunk 726.03 kB, то же предупреждение. |
-| Supabase Edge static check | `npx --yes deno check supabase/functions/vk-ai-api/index.ts supabase/functions/vk-ai-worker/index.ts` | Успешно для обоих entry points; не заменяет `supabase functions serve` или deployment runtime validation. |
+| Все Node tests | `npm test` | 41 passed, 0 failed; provider/VK transport проверяется только injected mocks, локальная генерация — test adapter. |
+| Production build | `npm run build` | Успешно; JS chunk 730.09 kB minified (Vite предупреждает о чанке >500 kB). |
+| GitHub Pages build | `npm run build:pages` | Успешно; demo backend + hash router; JS chunk 730.17 kB, то же предупреждение. |
+| Supabase Edge static check | `npx --yes deno check supabase/functions/vk-ai-api/index.ts supabase/functions/vk-ai-worker/index.ts` | PASS для обоих entry points; это static check, не Supabase Edge runtime. |
 | Owner CLI syntax | `node --check scripts/bootstrap-owner.mjs` | Успешно; network/credentials not used. |
-| Shared source parity | `node scripts/sync-shared.mjs --check` | ОК после синхронизации: 15 generated core files совпадают; shared core не зависит от Node/Deno/process. |
+| Shared source parity | `node scripts/sync-shared.mjs --check` | PASS: 16 generated core files совпадают; shared core не зависит от Node/Deno/process. |
 | Whitespace/conflict markers | `git diff --check` | Успешно. |
 | VK publication behavior | `server/tests/publication-safety.test.ts` | Mock `wall.delete`, VK-accepted/lost `wall.post` response (один запрос), unknown/repeat-job skips, approval/image guards. |
 | AI provider behavior | `server/tests/ai-safety.test.ts` | Mock chat/image transports, prompt/mode/reference/budget helpers; no external request. |
-| SQL outer grammar | Local `pglast.parse_sql` | 205: 44; 206: 4; 207: 3; 208: 15 statements parsed. PL/pgSQL bodies не исполнялись; миграции не применялись. |
+| SQL outer grammar | Local `pglast.parse_sql` | Все 14 SQL файлов (11 migrations + 3 fixtures) разбираются; PL/pgSQL object dependencies и полный migration run этим не проверяются. |
+| Schedule trigger regression | Isolated PGlite fixture | Миграция `20261015101000` и `supabase/tests/schedule_sync.sql` прошли на минимальной локальной схеме; full Supabase/PostgreSQL не запускался. |
+| AI budget SQL regression | Isolated PGlite fixture | Миграция `20261015100000` и `supabase/tests/ai_budget.sql` прошли на минимальной локальной схеме; это не две независимые PostgreSQL-сессии. |
+| Browser smoke | `npm run test:browser` | Не запущен: отсутствуют Playwright Chromium/WebKit binaries; 15 assertions не выполнялись. |
 
 Повторить полный обязательный набор:
 
@@ -498,8 +512,8 @@ git diff --check
 
 ## 10. Что **НЕ** проверено (нельзя утверждать, что работает)
 
-1. **Миграции Supabase не применялись** — нет ни локального PostgreSQL/Supabase, ни подключённого проекта. `pglast` разобрал только внешнюю SQL-грамматику; PL/pgSQL bodies, object names, triggers, RLS и transactions не исполнялись.
-2. **Edge Functions не запускались** в Deno/Supabase runtime. `deno check` для обоих entry points прошёл; `supabase functions serve`, deployment и production runtime не проверялись.
+1. **Полный набор миграций Supabase не применялся** — нет локального PostgreSQL/Supabase project. `pglast` разобрал внешнюю SQL-грамматику всех 14 файлов; отдельно PGlite выполнил обе новые AI-budget/schedule migration функции и rollbackable SQL tests на минимальных схемах. Остальные PL/pgSQL dependencies, RLS, grants и транзакционные пути не проверены.
+2. **Edge Functions не запускались** в Deno/Supabase runtime. `deno check` для обоих entry points прошёл статически через `npx`; `supabase functions serve`, deployment и production runtime не выполнялись.
 3. **Реальные VK вызовы** (отложенная публикация, upload, remote delete, права токена, лимиты, статистика) не выполнялись; production retry/cancellation lifecycle не проходил интеграционный тест.
 4. **Реальные AI providers** не вызывались. Prompt/mode/reference/budget code и mock tests добавлены, но provider tariffs, Edge runtime behavior, конкурентное резервирование бюджета и live compatibility не проверялись; paid AI calls должны оставаться выключенными.
 5. **Cron** и тариф Supabase не проверялись; нужны `pg_cron`, `pg_net` и настроенные Vault secrets.
@@ -555,16 +569,17 @@ git diff --check
 ## 12. Оставшиеся задачи по текущему запросу
 
 ### Block 1 — безопасная публикация/отмена
-Код и mock tests добавлены. Перед production необходимы: Deno/Supabase Edge runtime check;
-локальная PostgreSQL/Supabase migration validation (не production project); ручная review
-SQL lock order, grants, stale/unknown workflows. Не отправлять реальный `wall.post`/`wall.delete`.
+Код и mock tests добавлены. Статический `deno check` прошёл; перед production необходимы:
+Supabase Edge runtime check и PostgreSQL/Supabase migration validation на отдельном test project;
+ручная review SQL lock order, grants, stale/unknown workflows. Не отправлять реальный
+`wall.post`/`wall.delete`.
 
 ### Block 2 — AI prompt, mode, references, budgets — код/моки/static check завершены
 - Общие helper-ы синхронизированы в Deno core: явные режимы и scopes, bounded user prompts,
   templates, строгие community rules, правдивый reference policy, combined cost preflight.
 - Supabase и local adapters не передают reference images; metadata/warnings не обещают likeness.
 - Paid calls требуют явного server-side `ai_paid_calls_enabled=true` + provider key; defaults off.
-  По тестам используются только injected mocks; `deno check` прошёл, но runtime и тарифы не проверены.
+  По тестам используются только injected mocks; Deno static check прошёл, Edge runtime и тарифы не проверены.
 - Partial text/image regeneration сохраняет нетронутые компоненты, меняет draft на `review` и
   сбрасывает approval. Прямая генерация не может перезаписать scheduled/published post.
 - Миграция `20261014120600_ai_generation_safety.sql` добавляет cost estimate flag, поправляет
@@ -583,14 +598,13 @@ SQL lock order, grants, stale/unknown workflows. Не отправлять ре�
   env ownership, безопасный CLI flow, unknown VK/Auth outcomes и ограничения непроверенной миграции.
 - В docs есть final Codex checklist; сохранить без реальных сервисов, секретов и аккаунтов.
 
-### Wrap-up
-- Финальные локальные проверки прошли: `npm run typecheck`, `npm test` (30/30), обе сборки,
+### Wrap-up (архивная запись предыдущего этапа)
+- На тот момент проверки прошли: `npm run typecheck`, `npm test` (30/30), обе сборки,
   shared parity (15 files), `deno check`, CLI syntax check, pglast outer SQL parse и `git diff --check`.
   Production/Pages JS chunks 725.95/726.03 kB; Vite warning >500 kB сохранён.
-- Diff и secret-pattern scan проверены; блоки зафиксированы в `57c6794`, `b5fe96c`, `851ae49`.
-  Рабочая ветка должна оставаться чистой перед push.
-- Push выполнен для `arena/ff5941a8-vkbablo`; PR #10 открыт против `main` и остаётся OPEN, не merged.
-  Не просить ключи и не применять миграции к реальному Supabase.
+- Commit-и `57c6794`, `b5fe96c`, `851ae49` относятся к предыдущему этапу и сохранены в базе PR #10.
+- **Статус обновлён:** `gh pr view 10` подтвердил `MERGED` 15 октября 2026. Эта архивная запись о `OPEN` больше не актуальна.
+  Новые изменения — только в `arena/a5adadd9-vkbablo`; миграции и внешние интеграции всё ещё не запускались.
 
 ## 13. Команды
 

@@ -6,7 +6,17 @@ import { toast } from "@/components/toast";
 import type { Character } from "@shared/types";
 import { ChevronDown, Image as ImageIcon, Lock, ShieldAlert, Upload } from "lucide-react";
 
-function CharacterCard({ ch, onUpload }: { ch: Character; onUpload: (id: string, f: File) => void }) {
+function CharacterCard({
+  ch,
+  onUpload,
+  onApproveReference,
+  onSelectReference,
+}: {
+  ch: Character;
+  onUpload: (id: string, f: File) => void;
+  onApproveReference: (referenceId: string) => void;
+  onSelectReference: (referenceId: string) => void;
+}) {
   const [open, setOpen] = useState(false);
   const meta = COMMUNITY_META[ch.communityId];
   const refs = ch.references ?? [];
@@ -58,14 +68,25 @@ function CharacterCard({ ch, onUpload }: { ch: Character; onUpload: (id: string,
           <div>
             <div className="char-refs">
               {refs.map((r) => (
-                <img key={r.id} src={r.filePath} alt="" />
+                <div className="char-reference" key={r.id}>
+                  <img src={r.url || r.filePath} alt={`Референс: ${ch.name}`} />
+                  <div className="char-reference-actions">
+                    <Badge tone={r.approved ? "success" : "warning"}>{r.approved ? "Одобрен" : "На проверке"}</Badge>
+                    {r.isPrimary && <Badge tone="purple">Основной</Badge>}
+                    {!r.approved ? (
+                      <Button variant="secondary" onClick={() => onApproveReference(r.id)}>Одобрить</Button>
+                    ) : !r.isPrimary ? (
+                      <Button variant="secondary" onClick={() => onSelectReference(r.id)}>Сделать основным</Button>
+                    ) : null}
+                  </div>
+                </div>
               ))}
               {refs.length === 0 && <span className="empty-refs">Утверждённых референсов пока нет</span>}
             </div>
           </div>
           <label className="upload-label">
             <Upload size={15} />
-            <span>Загрузить утверждённый референс</span>
+            <span>Загрузить референс для одобрения владельцем</span>
             <input type="file" accept="image/*" onChange={(e) => e.target.files?.[0] && onUpload(ch.id, e.target.files[0])} />
           </label>
           {ch.appearanceStatus === "placeholder" && (
@@ -96,7 +117,18 @@ export default function CharactersPage() {
   async function upload(id: string, file: File) {
     try {
       await getBackend().uploadReference(id, file, "");
-      toast("Референс загружен. Внешность не меняется без снятия замка.");
+      toast("Референс загружен и сохранён как ожидающий одобрения.");
+      await load();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Ошибка", "error");
+    }
+  }
+
+  async function referenceAction(referenceId: string, action: "approve" | "primary") {
+    try {
+      if (action === "approve") await getBackend().approveReference(referenceId);
+      else await getBackend().setPrimaryReference(referenceId);
+      toast(action === "approve" ? "Референс одобрен владельцем." : "Основной референс изменён.");
       await load();
     } catch (e) {
       toast(e instanceof Error ? e.message : "Ошибка", "error");
@@ -112,7 +144,13 @@ export default function CharactersPage() {
       />
       <div className="character-grid">
         {items.map((ch) => (
-          <CharacterCard key={ch.id} ch={ch} onUpload={upload} />
+          <CharacterCard
+            key={ch.id}
+            ch={ch}
+            onUpload={upload}
+            onApproveReference={(referenceId) => void referenceAction(referenceId, "approve")}
+            onSelectReference={(referenceId) => void referenceAction(referenceId, "primary")}
+          />
         ))}
         <div className="add-character">
           <Upload size={25} />
