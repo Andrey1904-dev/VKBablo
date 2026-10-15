@@ -29,6 +29,12 @@ function fromBase64(value: string): Uint8Array {
   return bytes;
 }
 
+function asArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.length);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
 /** Формат: v1:<iv b64>:<ciphertext+tag b64> */
 export async function encryptSecret(plain: string): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -46,9 +52,9 @@ export async function decryptSecret(payload: string): Promise<string> {
     throw new Error("Неподдерживаемый формат секрета");
   }
   const plain = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: fromBase64(ivPart) },
+    { name: "AES-GCM", iv: asArrayBuffer(fromBase64(ivPart)) },
     await key(),
-    fromBase64(dataPart),
+    asArrayBuffer(fromBase64(dataPart)),
   );
   return decoder.decode(plain);
 }

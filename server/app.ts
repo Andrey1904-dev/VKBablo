@@ -358,6 +358,8 @@ export function createApp() {
       scheduledAt: body.scheduledAt,
       userId: c.get("user").id,
       force: Boolean(body.force),
+      kind: ["full_post", "text", "image", "idea", "preview"].includes(body.kind) ? body.kind : "full_post",
+      prompt: typeof body.prompt === "string" ? body.prompt : undefined,
     });
     return c.json({ post });
   });

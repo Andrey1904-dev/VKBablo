@@ -140,9 +140,24 @@ export default function PostDetailPage() {
               <Button variant="danger" disabled={busy} onClick={() => act(() => getBackend().rejectPost(id!, comment), "Публикация отклонена")}>
                 <X size={16} /> Отклонить
               </Button>
-              <Button variant="secondary" disabled={busy} onClick={() => act(() => getBackend().schedulePost(id!), "Запланировано")}>
-                <Send size={15} /> Запланировать в VK
-              </Button>
+              {p.status === "scheduled" ? (
+                <Button
+                  variant="danger"
+                  disabled={busy}
+                  onClick={() => {
+                    void act(
+                      () => getBackend().unschedulePost(id!, "отменено владельцем"),
+                      "Публикация снята с расписания; результат подтверждён сервером",
+                    );
+                  }}
+                >
+                  <X size={15} /> Снять с расписания
+                </Button>
+              ) : (
+                <Button variant="secondary" disabled={busy} onClick={() => act(() => getBackend().schedulePost(id!), "Запланировано")}>
+                  <Send size={15} /> Запланировать в VK
+                </Button>
+              )}
             </div>
 
             {p.errorMessage && (

@@ -46,13 +46,21 @@ export function preflight(req: Request): Response | null {
  * Обработка ошибок: наружу уходит понятное сообщение, стек — только в лог.
  * Секреты и токены никогда не попадают в текст ответа.
  */
+export function redactSecrets(value: string): string {
+  return value
+    .replace(/(sk-[A-Za-z0-9_-]{8,}|vk1\.[A-Za-z0-9_.-]{8,}|eyJ[A-Za-z0-9_-]{16,})/g, "***")
+    .replace(/(Bearer\s+)[A-Za-z0-9._~+\/-]{12,}/gi, "$1***")
+    .replace(/((?:access_token|api[_-]?key|service[_-]?role|encryption[_-]?key|worker[_-]?secret)\s*[=:]\s*)[^\s&,;]+/gi, "$1***")
+    .slice(0, 1200);
+}
+
 export function errorResponse(err: unknown, origin: string | null): Response {
   if (err instanceof ApiError) {
-    return json({ error: err.message, code: err.code }, err.status, origin);
+    return json({ error: redactSecrets(err.message), code: err.code }, err.status, origin);
   }
 
   const raw = err instanceof Error ? err.message : String(err);
-  const safe = raw.replace(/(sk-[A-Za-z0-9_-]{8,}|vk1\.[A-Za-z0-9_.-]{8,}|eyJ[A-Za-z0-9_-]{16,})/g, "***");
+  const safe = redactSecrets(raw);
   console.error("[vk-ai] error:", safe);
 
   // Наружу — обобщённый текст для неизвестных ошибок.

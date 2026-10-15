@@ -157,6 +157,9 @@ export function seedCore() {
     setSetting("ai_monthly_limit_usd", process.env.AI_MONTHLY_LIMIT_USD || "20");
   }
   if (!setting("ai_provider")) setSetting("ai_provider", "test");
+  if (!setting("ai_paid_calls_enabled")) {
+    setSetting("ai_paid_calls_enabled", (process.env.AI_PAID_CALLS_ENABLED ?? "false").toLowerCase() === "true" ? "true" : "false");
+  }
   if (!setting("ai_text_model")) setSetting("ai_text_model", "test-writer-v1");
   if (!setting("ai_image_model")) setSetting("ai_image_model", "test-illustrator-v1");
   if (!setting("ai_base_url")) setSetting("ai_base_url", "");

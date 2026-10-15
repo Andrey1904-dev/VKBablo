@@ -9,14 +9,15 @@
  */
 import { admin, asUser, callRpc, requireUser } from "../_shared/db.ts";
 import { ApiError, errorResponse, json, optionalString, preflight, requireString, readJson } from "../_shared/http.ts";
-import { WORKER_SECRET, configChecks } from "../_shared/env.ts";
+import { OWNER_SETUP_SECRET, WORKER_SECRET, configChecks } from "../_shared/env.ts";
+import { constantTimeTextEqual } from "../_shared/core/bootstrap-safety.ts";
 import { aiKeyHint, readCommunityToken, saveAiKey, saveCommunityToken } from "../_shared/secrets.ts";
 import { checkToken, VkError } from "../_shared/vk.ts";
 import { describeAdapter, generateTextWithAi } from "../_shared/ai.ts";
 import { referencesReadiness } from "../_shared/references.ts";
 import { FOLDERS, MAX_UPLOAD_BYTES, removeObject, signedUrl, uploadObject, type MediaFolder } from "../_shared/storage.ts";
 import { illustrationPrompt } from "../_shared/images.ts";
-import { processPublicationJobs } from "../_shared/publish.ts";
+import { cancelPublicationRemotely, processPublicationJobs } from "../_shared/publish.ts";
 import { generateIdeas } from "../_shared/core/content-engine.ts";
 import { COMMUNITY_IDS, type CommunityId } from "../_shared/core/types.ts";
 
@@ -26,7 +27,10 @@ Deno.serve(async (req: Request) => {
   if (pre) return pre;
 
   const url = new URL(req.url);
-  const route = url.pathname.replace(/^\/vk-ai-api/, "").replace(/^\/+/, "");
+  const route = url.pathname
+    .replace(/^\/functions\/v1\/vk-ai-api(?=\/|$)/, "")
+    .replace(/^\/vk-ai-api(?=\/|$)/, "")
+    .replace(/^\/+/, "");
 
   try {
     // Публичный health: не раскрывает секретов, только факт их наличия.
@@ -47,48 +51,93 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Первый запуск: создание владельца. Одноразовая операция, строго до появления профилей.
+    // Setup status is intentionally public but reveals no account details.
     if (route === "setup-state") {
-      const { count } = await admin().from("profiles").select("id", { count: "exact", head: true });
-      return json({ hasOwner: (count ?? 0) > 0, profiles: count ?? 0 }, 200, origin);
+      const { count, error } = await admin()
+        .from("profiles")
+        .select("id", { count: "exact", head: true })
+        .eq("role", "owner");
+      if (error) throw new ApiError(503, "Не удалось проверить статус первичной настройки", "setup_state");
+      return json({ hasOwner: (count ?? 0) > 0 }, 200, origin);
     }
 
+    // The one-time setup credential is checked only in this server function.
+    // The browser never receives or submits it; an operator uses the CLI script.
     if (route === "bootstrap/owner") {
       if (req.method !== "POST") throw new ApiError(405, "Метод не поддерживается", "method");
-
-      const { count } = await admin().from("profiles").select("id", { count: "exact", head: true });
-      if ((count ?? 0) > 0) {
-        throw new ApiError(403, "Владелец уже создан. Вход выполняется через Supabase Auth.", "already_setup");
+      if (OWNER_SETUP_SECRET.length < 32 || OWNER_SETUP_SECRET.length > 256) {
+        throw new ApiError(503, "Серверная первичная настройка владельца не включена; задайте OWNER_SETUP_SECRET через Supabase secrets.", "setup_disabled");
+      }
+      const providedSecret = req.headers.get("x-owner-setup-secret") ?? "";
+      if (!constantTimeTextEqual(providedSecret, OWNER_SETUP_SECRET)) {
+        throw new ApiError(403, "Запрос первичной настройки не авторизован", "setup_unauthorized");
       }
 
       const body = await readJson<Record<string, unknown>>(req);
       const email = requireString(body.email, "email", 200).trim().toLowerCase();
       const password = requireString(body.password, "password", 200);
-      const name = optionalString(body.name, 120) ?? "Владелец";
-
+      const name = optionalString(body.name, 120)?.trim() || "Владелец";
       if (!email.includes("@")) throw new ApiError(400, "Укажите корректный email", "validation");
       if (password.length < 10) throw new ApiError(400, "Пароль не короче 10 символов", "validation");
 
-      const created = await admin().auth.admin.createUser({
-        email,
-        password,
-        email_confirm: true,
-        user_metadata: { name },
-      });
-
-      if (created.error) {
-        throw new ApiError(400, `Не удалось создать владельца: ${created.error.message}`, "auth");
+      const claim = await callRpc<Record<string, unknown>>(admin(), "claim_owner_bootstrap", { p_email: email });
+      if (!Boolean(claim?.claimed)) {
+        const reason = String(claim?.reason ?? "unavailable");
+        if (reason === "already_setup" || reason === "already_used") {
+          throw new ApiError(409, "Первичная настройка уже использована. Выполните обычный вход.", "already_setup");
+        }
+        if (reason === "email_exists") {
+          throw new ApiError(409, "Этот email уже зарегистрирован в Supabase Auth. Выберите другой адрес; bootstrap не был зарезервирован.", "setup_email_exists");
+        }
+        if (reason === "in_progress") {
+          throw new ApiError(409, "Первичная настройка уже зарезервирована для другой операции; проверьте состояние у администратора.", "setup_in_progress");
+        }
+        throw new ApiError(409, "Не удалось зарезервировать первичную настройку владельца.", "setup_unavailable");
       }
 
-      // Профиль создаётся триггером app.handle_new_user; первый профиль получает роль owner.
-      await admin().from("notifications").insert({
-        type: "system",
-        title: "Владелец создан",
-        message: "Первый вход выполнен. Проверьте интеграции и предохранители в настройках.",
-        link: "/settings",
-      });
+      const resumed = Boolean(claim.resume);
+      let userId = typeof claim.userId === "string" ? claim.userId : "";
+      if (resumed && !userId) {
+        throw new ApiError(409, "Предыдущая попытка прервана до фиксации Auth ID. Не повторяйте создание вслепую; проверьте Supabase Auth и bootstrap state.", "setup_manual_recovery");
+      }
 
-      return json({ ok: true, userId: created.data.user?.id ?? null }, 201, origin);
+      if (!userId) {
+        let createdUserId = "";
+        try {
+          const created = await admin().auth.admin.createUser({
+            email,
+            password,
+            email_confirm: true,
+            user_metadata: { name },
+          });
+          if (created.error || !created.data.user?.id) {
+            throw new ApiError(409, "Auth не подтвердил создание владельца. Резервирование оставлено закрытым; проверьте Supabase Auth и bootstrap state перед восстановлением.", "setup_manual_recovery");
+          }
+          createdUserId = created.data.user.id;
+        } catch (error) {
+          if (error instanceof ApiError) throw error;
+          throw new ApiError(502, "Auth не подтвердил результат создания владельца. Не повторяйте запрос без проверки Auth и bootstrap state.", "setup_unknown");
+        }
+        userId = createdUserId;
+        await callRpc(admin(), "record_owner_bootstrap_user", { p_user_id: userId });
+      }
+
+      await callRpc(admin(), "complete_owner_bootstrap", {
+        p_user_id: userId,
+        p_email: email,
+        p_name: name,
+      });
+      try {
+        await admin().from("notifications").insert({
+          type: "system",
+          title: "Владелец создан",
+          message: "Первый вход выполнен. Проверьте интеграции и предохранители в настройках.",
+          link: "/settings",
+        });
+      } catch {
+        // Notification failure must not turn a completed one-time bootstrap into a retry.
+      }
+      return json({ ok: true }, 201, origin);
     }
 
     const user = await requireUser(req, { allowViewer: route === "bootstrap" });
@@ -196,14 +245,25 @@ Deno.serve(async (req: Request) => {
 
       case "posts/unschedule": {
         const body = await readJson<Record<string, unknown>>(req);
-        return json(
-          await callRpc(asUser(extractToken(req)), "unschedule_post", {
-            p_post_id: requireString(body.postId, "postId", 80),
-            p_reason: optionalString(body.reason, 300) ?? "",
-          }),
-          200,
-          origin,
-        );
+        const result = await callRpc<Record<string, unknown>>(asUser(extractToken(req)), "begin_post_unschedule", {
+          p_post_id: requireString(body.postId, "postId", 80),
+          p_reason: optionalString(body.reason, 300) ?? "",
+        });
+        if (result?.kind === "local") {
+          return json({ ok: true, status: "cancelled", post: result.post }, 200, origin);
+        }
+        if (result?.kind === "remote") {
+          const cancellation = await cancelPublicationRemotely({
+            jobId: String(result.jobId ?? ""),
+            postId: String(result.postId ?? ""),
+            vkPostId: String(result.vkPostId ?? ""),
+            groupId: String(result.groupId ?? ""),
+            communityId: requireString(result.communityId, "communityId", 40),
+          });
+          return json({ ok: true, status: cancellation.status }, 200, origin);
+        }
+        const warning = String(result?.warning ?? "Отмена не подтверждена; публикация может остаться во ВКонтакте. Проверьте VK вручную.");
+        throw new ApiError(502, warning, result?.kind === "unknown" ? "remote_cancel_unknown" : "remote_cancel_pending");
       }
 
       case "posts/regenerate": {

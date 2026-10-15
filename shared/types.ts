@@ -208,8 +208,11 @@ export interface GenerationMeta {
   costUsd: number;
   ideaSource: string;
   warnings: string[];
-  /** Честные ограничения выбранного провайдера (например, отсутствие identity-lock). */
+  /** Честные ограничения выбранного провайдера (например, отсутствие передачи референсов). */
   providerLimitations?: string[];
+  /** Стоимость вычислена по usage/тарифной оценке, а не подтверждена счётом провайдера. */
+  costEstimated?: boolean;
+  promptTemplateId?: string;
   demo?: boolean;
 }
 

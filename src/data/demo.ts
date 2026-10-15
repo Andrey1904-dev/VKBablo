@@ -46,6 +46,7 @@ import { DEFAULT_SLOTS, addDays, moscowParts, moscowSlotIso, normalizeSlots, upc
 import { mulberry32, seedFrom, uid } from "@shared/prng";
 import { similarity } from "@shared/similarity";
 import { validateCommunityText } from "@shared/rules";
+import { resolveGenerationMode, sanitizeUserPrompt } from "@shared/ai-safety";
 import { demoIllustrationDataUrl } from "@shared/demo-image";
 import { CONFIG } from "@/lib/config";
 import type { Backend, CommunityDetail, GenerateSlotInput, VkConnectResult } from "./types";
@@ -337,22 +338,37 @@ export class DemoBackend implements Backend {
     this.state.versions = this.state.versions.slice(0, 500);
   }
 
-  private generateForSlot(input: GenerateSlotInput): Post {
+  private generateForSlot(input: GenerateSlotInput, preserveExistingContext = false): Post {
     const communityId = input.communityId as CommunityId;
     const existing = this.state.posts.find(
       (p) => p.communityId === communityId && p.scheduledAt === input.scheduledAt && p.status !== "rejected",
     );
-
+    if (existing && ["scheduled", "published"].includes(existing.status)) {
+      throw new Error("Запланированную или опубликованную публикацию нельзя генерировать заново; сначала отмените планирование или создайте новый слот.");
+    }
+    const mode = resolveGenerationMode(input.kind ?? "full_post");
+    const preserveContext = Boolean(existing && (preserveExistingContext || mode.scope === "text" || mode.scope === "image"));
     const id = existing?.id ?? uid("post");
-    const idea: Idea = generateIdea(
-      communityId,
-      this.state.posts.filter((p) => p.communityId === communityId).map((p) => p.topic),
-      id,
-    );
-    const text = generateText(communityId, idea, id);
+    const guidance = sanitizeUserPrompt(input.prompt, 500);
+    const idea: Idea = preserveContext && existing?.topic
+      ? { key: `${communityId}:${existing.topic}:preserved`, topic: existing.topic, title: existing.title || existing.topic, angle: existing.idea }
+      : guidance
+        ? { key: `${communityId}:${guidance}:manual`, topic: guidance, title: guidance.slice(0, 120), angle: "Развернуть пожелание пользователя, соблюдая правила сообщества." }
+        : generateIdea(
+            communityId,
+            this.state.posts.filter((p) => p.communityId === communityId).map((p) => p.topic),
+            id,
+          );
+    const text = mode.generateText ? generateText(communityId, idea, id) : existing?.text ?? "";
     const demoImagePath = `demo://${communityId}/${id}`;
-    const warnings = validateCommunityText(communityId, text).map((v) => `${v.severity === "error" ? "⛔" : "⚠"} ${v.message}`);
-    warnings.push("⚠ ДЕМО-РЕЖИМ: текст создан детерминированным тестовым движком, а не платной моделью.");
+    const imagePath = mode.generateImage ? demoImagePath : existing?.imagePath ?? null;
+    const title = preserveContext && existing ? existing.title : idea.title;
+    const warnings = mode.generateText
+      ? validateCommunityText(communityId, text).map((v) => `${v.severity === "error" ? "⛔" : "⚠"} ${v.message}`)
+      : [...(existing?.generationMeta?.warnings ?? [])];
+    warnings.push("⚠ ДЕМО-РЕЖИМ: используется детерминированный тестовый движок; платные вызовы не выполняются.");
+    if (guidance && mode.generateText) warnings.push("⚠ Демонстрационный движок использует пожелание как тему, но не интерпретирует произвольные инструкции как языковая модель.");
+    if (mode.generateImage) warnings.push("⚠ Демо-иллюстрация не использует утверждённые изображения-референсы и не гарантирует сходство.");
 
     const timestamp = nowIso();
     const post: Post = existing ?? {
@@ -383,15 +399,17 @@ export class DemoBackend implements Backend {
       updatedAt: timestamp,
     };
 
-    if (existing) this.version(existing, "regenerate:all");
+    if (existing) this.version(existing, `regenerate:${mode.scope}`);
 
     post.status = "review";
-    post.title = idea.title;
+    post.title = title;
     post.text = text;
-    post.topic = idea.topic;
-    post.idea = idea.angle;
-    post.imagePath = demoImagePath;
-    post.imagePrompt = `Демонстрационная иллюстрация: ${idea.topic}`;
+    post.topic = preserveContext && existing ? existing.topic : idea.topic;
+    post.idea = preserveContext && existing ? existing.idea : idea.angle;
+    post.imagePath = imagePath;
+    post.imagePrompt = mode.generateImage
+      ? `Демонстрационная иллюстрация: ${idea.topic}${guidance ? `\nПожелание пользователя (демо не интерпретирует его как языковая модель): ${guidance}` : ""}`
+      : existing?.imagePrompt ?? "";
     post.approvedHash = null;
     post.approvedAt = null;
     post.approvedBy = null;
@@ -401,23 +419,25 @@ export class DemoBackend implements Backend {
     post.updatedAt = nowIso();
     post.generationMeta = {
       provider: "test",
-      model: "test-writer-v1",
-      imageProvider: "test",
-      imageModel: "test-illustrator-v1",
-      costUsd: 0,
-      ideaSource: idea.key,
-      warnings,
+      model: mode.generateText ? "test-writer-v1" : existing?.generationMeta?.model ?? "test-writer-v1",
+      imageProvider: mode.generateImage ? "test" : existing?.generationMeta?.imageProvider ?? "test",
+      imageModel: mode.generateImage ? "test-illustrator-v1" : existing?.generationMeta?.imageModel ?? "test-illustrator-v1",
+      costUsd: Number(existing?.generationMeta?.costUsd ?? 0),
+      ideaSource: preserveContext && existing ? `${communityId}:${existing.topic}:preserved` : idea.key,
+      warnings: [...(existing?.generationMeta?.warnings ?? []), ...warnings],
       demo: true,
-      providerLimitations: ["ДЕМО-РЕЖИМ: платные AI-провайдеры не вызываются."],
+      providerLimitations: ["ДЕМО-РЕЖИМ: платные AI-провайдеры не вызываются; референсы не передаются."],
     };
 
-    const previous = this.state.posts.filter((p) => p.communityId === communityId && p.id !== post.id);
-    let best = 0;
-    for (const row of previous) best = Math.max(best, similarity(text, row.text));
-    post.similarityScore = Number(best.toFixed(4));
+    if (mode.generateText) {
+      const previous = this.state.posts.filter((p) => p.communityId === communityId && p.id !== post.id);
+      let best = 0;
+      for (const row of previous) best = Math.max(best, similarity(text, row.text));
+      post.similarityScore = Number(best.toFixed(4));
+    }
 
     if (!existing) this.state.posts.push(post);
-    this.syncHash(post, "generation");
+    this.syncHash(post, `generation:${mode.scope}`);
     this.state.jobs.unshift({
       id: uid("job"),
       type: "generation",
@@ -426,17 +446,17 @@ export class DemoBackend implements Backend {
       maxAttempts: 3,
       runAt: timestamp,
       error: null,
-      idempotencyKey: `gen:${communityId}:${input.scheduledAt}:full_post`,
+      idempotencyKey: `gen:${communityId}:${input.scheduledAt}:${mode.scope}`,
       createdAt: timestamp,
     });
     this.state.jobs = this.state.jobs.slice(0, 100);
     this.state.generations.unshift({
       id: uid("gen"),
       communityId,
-      type: "full_post",
+      type: mode.scope,
       provider: "test",
       model: "test-writer-v1",
-      prompt: idea.topic,
+      prompt: guidance || idea.topic,
       result: text.slice(0, 500),
       costUsd: 0,
       status: "done",
@@ -444,8 +464,8 @@ export class DemoBackend implements Backend {
       createdAt: timestamp,
     });
     this.state.generations = this.state.generations.slice(0, 100);
-    this.notify("review", "Новый пост на проверке", `${COMMUNITY_META[communityId].shortName}: «${idea.title}»`, `/posts/${post.id}`);
-    this.logAudit("generate", "post", post.id, { demo: true });
+    this.notify("review", "Публикация на проверке", `${COMMUNITY_META[communityId].shortName}: «${title}»`, `/posts/${post.id}`);
+    this.logAudit("generate", "post", post.id, { demo: true, scope: mode.scope });
 
     return post;
   }
@@ -791,7 +811,7 @@ export class DemoBackend implements Backend {
     if (["published", "scheduled"].includes(post.status)) {
       throw new Error("Сначала снимите публикацию с планирования");
     }
-    return this.generateForSlot({ communityId: post.communityId, scheduledAt: post.scheduledAt, force: true, kind: what === "image" ? "image" : "full_post" });
+    return this.generateForSlot({ communityId: post.communityId, scheduledAt: post.scheduledAt, force: true, kind: what === "all" ? "full_post" : what }, true);
   }
 
   async schedulePost(id: string): Promise<{ post: Post; dryRun: boolean }> {
