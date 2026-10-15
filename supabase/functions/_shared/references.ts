@@ -38,6 +38,8 @@ export async function primaryReferenceFor(
       .from("character_references")
       .select("id, storage_path, approved")
       .eq("id", primaryReferenceId)
+      .eq("character_id", characterId)
+      .eq("approved", true)
       .maybeSingle();
     if (data?.approved) return data as { id: string; storage_path: string; approved: boolean };
   }

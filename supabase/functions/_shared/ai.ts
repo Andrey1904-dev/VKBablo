@@ -1,22 +1,20 @@
 /**
- * AI-адаптеры §10 ТЗ.
+ * AI adapters and safety gates.
  *
- * Правила безопасности:
- *  • по умолчанию вызовы платных провайдеров ЗАПРЕЩЕНЫ (`ai_paid_calls_enabled = false`);
- *  • при превышении лимита расходов вызов отклоняется;
- *  • если ключа нет или провайдер выключен — работает тестовый движок, и это видно в метаданных;
- *  • в журнал `ai_generations` пишутся промпт, модель, стоимость, статус и ошибки.
- *
- * Ни один адаптер не возвращает фиктивные данные как результат платной модели:
- * тестовый движок всегда помечается provider = "test" и demo = true.
+ * Defaults are deliberately safe: paid calls are off, the test provider never
+ * makes a network request, and configured providers cannot send image
+ * references until an adapter actually implements reference transfer.
  */
 import { admin } from "./db.ts";
 import { readAiKey } from "./secrets.ts";
 import { AI_BASE_URL, AI_IMAGE_MODEL, AI_TEXT_MODEL } from "./env.ts";
 import type { CommunityId } from "./core/types.ts";
+import { DEFAULT_AI_PROMPTS } from "./core/constants.ts";
 import { generateIdea, generateText, type Idea } from "./core/content-engine.ts";
-import { buildDemoIllustration, DEMO_IMAGE_NOTE, illustrationPrompt } from "./images.ts";
+import { buildDemoIllustration, DEMO_IMAGE_NOTE } from "./images.ts";
 import { uploadObject } from "./storage.ts";
+import { assertBudgetAvailable, paidAiCallAllowed } from "./core/ai-safety.ts";
+import { ProviderRequestError, requestCompatibleImage, requestCompatibleText } from "./core/ai-provider.ts";
 
 export interface AiAdapter {
   id: string;
@@ -31,20 +29,23 @@ export interface TextResult {
   text: string;
   model: string;
   costUsd: number;
+  costEstimated: boolean;
   provider: string;
   demo: boolean;
+  warning?: string;
 }
 
 export interface ImageResult {
   path: string;
   model: string;
   costUsd: number;
+  costEstimated: boolean;
   provider: string;
   demo: boolean;
   note?: string;
 }
 
-interface Settings {
+export interface AiSettings {
   provider: string;
   textModel: string;
   imageModel: string;
@@ -52,37 +53,126 @@ interface Settings {
   limitUsd: number;
   spendUsd: number;
   paidEnabled: boolean;
+  /** Conservative estimate from server-side provider metadata. */
+  textPricePer1kTokensUsd: number;
+  imagePriceUsd: number;
+  maxTokens: number;
+  supportsReferences: false;
 }
 
-export async function loadAiSettings(): Promise<Settings> {
-  const { data } = await admin().from("application_settings").select("key, value");
-  const map = new Map((data ?? []).map((row: { key: string; value: string }) => [row.key, row.value]));
-
-  const { data: spend } = await admin().rpc("month_spend_usd");
-  const limit = Number(map.get("ai_monthly_limit_usd") ?? "20");
-
-  return {
-    provider: map.get("ai_provider") ?? "test",
-    textModel: map.get("ai_text_model") || AI_TEXT_MODEL || "gpt-4o-mini",
-    imageModel: map.get("ai_image_model") || AI_IMAGE_MODEL || "gpt-image-1",
-    baseUrl: map.get("ai_base_url") || AI_BASE_URL,
-    limitUsd: Number.isFinite(limit) ? limit : 20,
-    spendUsd: Number(spend ?? 0),
-    // Предохранитель: платные вызовы выключены, пока владелец не включит их явно.
-    paidEnabled: (map.get("ai_paid_calls_enabled") ?? "false") === "true",
-  };
+export interface PromptTemplateRecord {
+  id: string | null;
+  name: string;
+  template: string;
+  version: number;
+  source: "database" | "builtin";
+  warning?: string;
 }
 
-export function budgetGuard(settings: Settings, estimatedUsd: number): void {
-  if (settings.limitUsd > 0 && settings.spendUsd + estimatedUsd > settings.limitUsd) {
-    throw new Error(
-      `Достигнут лимит расходов на AI: $${settings.spendUsd.toFixed(2)} из $${settings.limitUsd}. ` +
-        `Увеличьте лимит в настройках или дождитесь нового месяца.`,
-    );
+export interface GenerationLogRow {
+  communityId?: string | null;
+  postId?: string | null;
+  jobId?: string | null;
+  type: string;
+  provider: string;
+  model: string;
+  prompt: string;
+  result: string;
+  costUsd: number;
+  costEstimated?: boolean;
+  status: string;
+  error?: string | null;
+}
+
+export interface AiRuntime {
+  readAiKey(): Promise<string | null>;
+  fetcher: typeof fetch;
+  logGeneration(row: GenerationLogRow): Promise<void>;
+  uploadImage(bytes: Uint8Array, mime: string, extension: string): Promise<{ path: string }>;
+}
+
+export class AiCallError extends Error {
+  readonly costUsd: number;
+  constructor(message: string, costUsd: number) {
+    super(message);
+    this.name = "AiCallError";
+    this.costUsd = costUsd;
   }
 }
 
-export function paidGuard(settings: Settings): string | null {
+const DEFAULT_TEXT_PRICE_PER_1K_USD = 0.001;
+const UNKNOWN_PROVIDER_TEXT_PRICE_PER_1K_USD = 0.01;
+const DEFAULT_IMAGE_PRICE_USD = 0.1;
+const DEFAULT_MAX_TOKENS = 900;
+
+export async function loadAiSettings(): Promise<AiSettings> {
+  const client = admin();
+  const { data: rows, error: settingsError } = await client.from("application_settings").select("key, value");
+  if (settingsError) throw new Error(`Не удалось прочитать настройки AI; платный вызов заблокирован: ${settingsError.message}`);
+
+  const values = new Map<string, string>((rows ?? []).map((row: { key: string; value: unknown }) => [String(row.key), String(row.value ?? "")]));
+  const providerRaw = values.get("ai_provider") ?? "test";
+  const provider = ["test", "openai", "compatible", "custom"].includes(providerRaw) ? providerRaw : "test";
+
+  const [spendResult, providerResult] = await Promise.all([
+    client.rpc("month_spend_usd"),
+    client.from("ai_providers")
+      .select("price_per_image_usd, price_per_1k_tokens_usd")
+      .eq("id", provider)
+      .maybeSingle(),
+  ]);
+  if (spendResult.error) throw new Error(`Не удалось проверить расходы AI; платный вызов заблокирован: ${spendResult.error.message}`);
+  if (providerResult.error) throw new Error(`Не удалось прочитать тариф AI; платный вызов заблокирован: ${providerResult.error.message}`);
+
+  const spendUsd = Number(spendResult.data);
+  const limitRaw = values.get("ai_monthly_limit_usd");
+  const limitUsd = limitRaw === undefined ? 20 : Number(limitRaw);
+  if (!Number.isFinite(spendUsd) || spendUsd < 0 || !Number.isFinite(limitUsd) || limitUsd < 0) {
+    throw new Error("Настройки бюджета AI повреждены; платный вызов заблокирован.");
+  }
+
+  const rawTextRate = Number(providerResult.data?.price_per_1k_tokens_usd ?? 0);
+  const rawImagePrice = Number(providerResult.data?.price_per_image_usd ?? 0);
+  const textPricePer1kTokensUsd = provider === "test"
+    ? 0
+    : Math.max(Number.isFinite(rawTextRate) ? rawTextRate : 0, provider === "openai" ? DEFAULT_TEXT_PRICE_PER_1K_USD : UNKNOWN_PROVIDER_TEXT_PRICE_PER_1K_USD);
+  const imagePriceUsd = provider === "test"
+    ? 0
+    : Math.max(Number.isFinite(rawImagePrice) ? rawImagePrice : 0, DEFAULT_IMAGE_PRICE_USD);
+  const baseUrl = values.get("ai_base_url") || AI_BASE_URL;
+
+  return {
+    provider,
+    textModel: values.get("ai_text_model") || AI_TEXT_MODEL || "gpt-4o-mini",
+    imageModel: values.get("ai_image_model") || AI_IMAGE_MODEL || "gpt-image-1",
+    baseUrl,
+    limitUsd,
+    spendUsd,
+    paidEnabled: (values.get("ai_paid_calls_enabled") ?? "false").toLowerCase() === "true",
+    textPricePer1kTokensUsd,
+    imagePriceUsd,
+    maxTokens: DEFAULT_MAX_TOKENS,
+    // Existing chat-completions / images-generations adapters do not upload references.
+    supportsReferences: false,
+  };
+}
+
+export function budgetGuard(settings: AiSettings, estimatedUsd: number): void {
+  assertBudgetAvailable(settings.spendUsd, settings.limitUsd, estimatedUsd);
+}
+
+export function estimateTextCostUsd(input: { system: string; user: string }, settings: AiSettings): number {
+  // Russian prompts can use relatively more tokens than English; use a conservative 2 chars/token.
+  const estimatedInputTokens = Math.ceil((input.system.length + input.user.length) / 2);
+  const estimatedTokens = estimatedInputTokens + settings.maxTokens;
+  return Math.max(settings.textPricePer1kTokensUsd, settings.provider === "test" ? 0 : DEFAULT_TEXT_PRICE_PER_1K_USD) * estimatedTokens / 1000;
+}
+
+export function estimateImageCostUsd(settings: AiSettings): number {
+  return settings.provider === "test" ? 0 : Math.max(settings.imagePriceUsd, DEFAULT_IMAGE_PRICE_USD);
+}
+
+export function paidGuard(settings: AiSettings): string | null {
   if (settings.provider === "test") return null;
   if (!settings.paidEnabled) {
     return "Платные AI-вызовы выключены. Работает тестовый движок (provider = test).";
@@ -107,25 +197,52 @@ export interface ImageInput {
   referenceUrls?: string[];
 }
 
+export async function loadAiPromptTemplate(communityId: CommunityId, kind: "text" | "image"): Promise<PromptTemplateRecord> {
+  const fallback = DEFAULT_AI_PROMPTS.find((item) => item.communityId === communityId && item.kind === kind && item.active);
+  const fallbackRecord: PromptTemplateRecord | null = fallback
+    ? { id: fallback.id, name: fallback.name, template: fallback.template, version: fallback.version, source: "builtin", warning: "Используется встроенный безопасный шаблон: активный шаблон из БД недоступен." }
+    : null;
+
+  try {
+    const { data, error } = await admin()
+      .from("ai_prompt_templates")
+      .select("id, name, template, version")
+      .eq("community_id", communityId)
+      .eq("kind", kind)
+      .eq("active", true)
+      .order("version", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) return fallbackRecord ?? { id: null, name: "", template: "", version: 0, source: "builtin", warning: "Шаблоны недоступны; использованы постоянные правила приложения." };
+    if (data && typeof data.template === "string") {
+      return { id: String(data.id), name: String(data.name ?? ""), template: data.template, version: Number(data.version ?? 1), source: "database" };
+    }
+  } catch {
+    // The hard-coded prompt and community rules remain available if this table is not seeded yet.
+  }
+  return fallbackRecord ?? { id: null, name: "", template: "", version: 0, source: "builtin", warning: "Активный шаблон не найден; использованы постоянные правила приложения." };
+}
+
 export async function describeAdapter(): Promise<AiAdapter> {
   const settings = await loadAiSettings();
   const key = await readAiKey();
   const guard = paidGuard(settings);
-  const isLive = settings.provider !== "test" && !!key && !guard;
+  const isLive = paidAiCallAllowed(settings.provider, settings.paidEnabled, Boolean(key));
 
   if (!isLive) {
+    const label = guard
+      ? `Тестовый движок (${guard})`
+      : settings.provider === "test"
+        ? "Тестовый движок (выбран)"
+        : "Тестовый движок (ключ AI не задан)";
     return {
       id: "test",
-      label: guard
-        ? `Тестовый движок (${guard})`
-        : key
-          ? "Тестовый движок (провайдер не выбран)"
-          : "Тестовый движок (ключ AI не задан)",
+      label,
       demo: true,
       supportsReferences: false,
       supportsIdentityLock: false,
       limitations: [
-        guard ?? "Ключ AI не задан: генерируется детерминированный демонстрационный контент.",
+        guard ?? "Генерируется детерминированный демонстрационный контент; платный AI не вызывается.",
         "Тестовый движок не является языковой моделью и не обещает сохранение внешности персонажей.",
       ],
     };
@@ -135,29 +252,17 @@ export async function describeAdapter(): Promise<AiAdapter> {
     id: settings.provider,
     label: settings.provider === "openai" ? "OpenAI" : `Совместимый API (${settings.baseUrl})`,
     demo: false,
-    supportsReferences: true,
+    supportsReferences: false,
     supportsIdentityLock: false,
     limitations: [
-      "Точное сохранение внешности персонажа по референсу не гарантируется выбранной моделью: " +
-        "идентичность может плавать между публикациями.",
+      "Текущий адаптер не передаёт изображения-референсы провайдеру; сходство персонажей не гарантируется.",
+      "Identity-lock не реализован; каждую публикацию обязательно проверять вручную.",
     ],
   };
 }
 
-async function logGeneration(row: {
-  communityId?: string | null;
-  postId?: string | null;
-  jobId?: string | null;
-  type: string;
-  provider: string;
-  model: string;
-  prompt: string;
-  result: string;
-  costUsd: number;
-  status: string;
-  error?: string | null;
-}): Promise<void> {
-  await admin().from("ai_generations").insert({
+async function logGeneration(row: GenerationLogRow): Promise<void> {
+  const { error } = await admin().from("ai_generations").insert({
     community_id: row.communityId ?? null,
     post_id: row.postId ?? null,
     job_id: row.jobId ?? null,
@@ -167,105 +272,166 @@ async function logGeneration(row: {
     prompt: row.prompt.slice(0, 4000),
     result: row.result.slice(0, 8000),
     cost_usd: row.costUsd,
+    cost_estimated: row.costEstimated ?? false,
     status: row.status,
     error: row.error ?? null,
   });
+  if (error) throw new Error(`Не удалось записать журнал AI: ${error.message}`);
+}
+
+const defaultRuntime: AiRuntime = {
+  readAiKey,
+  fetcher: (...args) => fetch(...args),
+  logGeneration,
+  async uploadImage(bytes, mime, extension) {
+    return uploadObject({ folder: "generated", bytes, mime, extension });
+  },
+};
+
+function fullPromptForLog(input: { system: string; user: string }): string {
+  return `SYSTEM:\n${input.system}\n\nUSER:\n${input.user}`;
+}
+
+function redactError(value: string, key: string | null): string {
+  let out = value.replace(/Bearer\s+[^\s"']+/gi, "Bearer [REDACTED]");
+  if (key) out = out.split(key).join("[REDACTED]");
+  return out.slice(0, 500);
+}
+
+function normalizedBaseUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("AI_BASE_URL должен быть корректным HTTPS URL; платный вызов заблокирован.");
+  }
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
+    throw new Error("AI_BASE_URL должен использовать HTTPS и не содержать credentials/query; платный вызов заблокирован.");
+  }
+  return url.toString().replace(/\/$/, "");
+}
+
+function isAiCallError(error: unknown): error is AiCallError | ProviderRequestError {
+  return error instanceof AiCallError || error instanceof ProviderRequestError;
+}
+
+async function logFailedCall(runtime: AiRuntime, row: GenerationLogRow, error: unknown): Promise<void> {
+  try {
+    await runtime.logGeneration({
+      ...row,
+      status: "error",
+      result: "",
+      error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
+    });
+  } catch {
+    // The original failure remains the actionable error; never include provider credentials.
+  }
 }
 
 export async function generateTextWithAi(
   input: TextInput & { postId?: string | null; jobId?: string | null },
-  settingsArg?: Settings,
+  settingsArg?: AiSettings,
+  runtime: AiRuntime = defaultRuntime,
 ): Promise<TextResult> {
   const settings = settingsArg ?? (await loadAiSettings());
   const guard = paidGuard(settings);
-  const key = await readAiKey();
+  const key = await runtime.readAiKey();
+  const promptForLog = fullPromptForLog(input);
 
   if (guard || !key || settings.provider === "test") {
     const idea = input.idea ?? generateIdea(input.communityId, [], input.seed);
     const text = generateText(input.communityId, idea, input.seed);
-    await logGeneration({
+    await runtime.logGeneration({
       communityId: input.communityId,
       postId: input.postId,
       jobId: input.jobId,
       type: "text",
       provider: "test",
       model: "test-writer-v1",
-      prompt: input.user,
+      prompt: promptForLog,
       result: text,
       costUsd: 0,
       status: "done",
     });
-    return { text, model: "test-writer-v1", costUsd: 0, provider: "test", demo: true };
-  }
-
-  budgetGuard(settings, 0.002);
-  const base = settings.baseUrl.replace(/\/$/, "");
-  const response = await fetch(`${base}/chat/completions`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: settings.textModel,
-      temperature: 0.85,
-      messages: [
-        { role: "system", content: input.system },
-        { role: "user", content: input.user },
-      ],
-    }),
-    signal: AbortSignal.timeout(60_000),
-  });
-
-  if (!response.ok) {
-    const body = await response.text();
-    const error = `AI API ${response.status}: ${body.slice(0, 300)}`;
-    await logGeneration({
-      communityId: input.communityId,
-      postId: input.postId,
-      jobId: input.jobId,
-      type: "text",
-      provider: settings.provider,
-      model: settings.textModel,
-      prompt: input.user,
-      result: "",
+    return {
+      text,
+      model: "test-writer-v1",
       costUsd: 0,
-      status: "error",
-      error,
-    });
-    throw new Error(error);
+      costEstimated: false,
+      provider: "test",
+      demo: true,
+      warning: guard ?? (!key && settings.provider !== "test" ? "Ключ AI не задан; использован тестовый движок." : undefined),
+    };
   }
 
-  const payload = (await response.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-    usage?: { prompt_tokens?: number; completion_tokens?: number };
-  };
-  const text = payload.choices?.[0]?.message?.content?.trim();
-  if (!text) throw new Error("Пустой ответ модели");
-
-  const cost = ((payload.usage?.prompt_tokens ?? 0) * 0.00000015) +
-    ((payload.usage?.completion_tokens ?? 0) * 0.0000006);
-
-  await logGeneration({
+  const estimatedCost = estimateTextCostUsd(input, settings);
+  budgetGuard(settings, estimatedCost);
+  const base = normalizedBaseUrl(settings.baseUrl);
+  const logBase: GenerationLogRow = {
     communityId: input.communityId,
     postId: input.postId,
     jobId: input.jobId,
     type: "text",
     provider: settings.provider,
     model: settings.textModel,
-    prompt: input.user,
-    result: text,
-    costUsd: cost,
-    status: "done",
-  });
+    prompt: promptForLog,
+    result: "",
+    costUsd: estimatedCost,
+    costEstimated: true,
+    status: "error",
+  };
 
-  return { text, model: settings.textModel, costUsd: cost, provider: settings.provider, demo: false };
+  try {
+    const result = await requestCompatibleText({
+      fetcher: runtime.fetcher,
+      baseUrl: base,
+      apiKey: key,
+      model: settings.textModel,
+      system: input.system,
+      user: input.user,
+      maxTokens: settings.maxTokens,
+      pricePer1kTokensUsd: settings.textPricePer1kTokensUsd,
+      estimatedCostUsd: estimatedCost,
+      signal: AbortSignal.timeout(60_000),
+    });
+    const text = result.text;
+    const hasUsage = result.usageReported;
+    const costUsd = result.costUsd;
+    const costEstimated = true; // The configured rate is an estimate, not a provider invoice.
+    let logWarning: string | undefined;
+    try {
+      await runtime.logGeneration({ ...logBase, result: text, costUsd, costEstimated: true, status: "done" });
+    } catch {
+      // A completed provider response must not be retried only because audit logging failed.
+      logWarning = "Ответ AI получен, но запись журнала не удалась; проверьте лимит расходов вручную.";
+    }
+    settings.spendUsd += costUsd;
+    return {
+      text,
+      model: settings.textModel,
+      costUsd,
+      costEstimated,
+      provider: settings.provider,
+      demo: false,
+      warning: [!hasUsage ? "Провайдер не вернул usage; стоимость учтена по консервативной оценке." : "Стоимость рассчитана по тарифу из настроек; сверяйте её со счётом.", logWarning].filter(Boolean).join(" ") || undefined,
+    };
+  } catch (error) {
+    const message = redactError(error instanceof Error ? error.message : String(error), key);
+    const costUsd = isAiCallError(error) ? error.costUsd : estimatedCost;
+    await logFailedCall(runtime, { ...logBase, costUsd }, message);
+    if (error instanceof AiCallError) throw new AiCallError(message, costUsd);
+    throw new AiCallError(`Не удалось выполнить запрос к AI: ${message}`, costUsd);
+  }
 }
 
 export async function generateImageWithAi(
   input: ImageInput & { postId?: string | null; jobId?: string | null },
-  settingsArg?: Settings,
+  settingsArg?: AiSettings,
+  runtime: AiRuntime = defaultRuntime,
 ): Promise<ImageResult> {
   const settings = settingsArg ?? (await loadAiSettings());
   const guard = paidGuard(settings);
-  const key = await readAiKey();
+  const key = await runtime.readAiKey();
 
   if (guard || !key || settings.provider === "test") {
     const svg = buildDemoIllustration({
@@ -274,13 +440,8 @@ export async function generateImageWithAi(
       topic: input.topic,
       seed: input.seed,
     });
-    const uploaded = await uploadObject({
-      folder: "generated",
-      bytes: new TextEncoder().encode(svg),
-      mime: "image/svg+xml",
-      extension: "svg",
-    });
-    await logGeneration({
+    const uploaded = await runtime.uploadImage(new TextEncoder().encode(svg), "image/svg+xml", "svg");
+    await runtime.logGeneration({
       communityId: input.communityId,
       postId: input.postId,
       jobId: input.jobId,
@@ -296,54 +457,20 @@ export async function generateImageWithAi(
       path: uploaded.path,
       model: "test-illustrator-v1",
       costUsd: 0,
+      costEstimated: false,
       provider: "test",
       demo: true,
-      note: DEMO_IMAGE_NOTE,
+      note: guard ?? DEMO_IMAGE_NOTE,
     };
   }
 
-  budgetGuard(settings, 0.06);
-  const base = settings.baseUrl.replace(/\/$/, "");
-  const response = await fetch(`${base}/images/generations`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: settings.imageModel,
-      prompt: input.prompt,
-      size: "1024x1024",
-      n: 1,
-      response_format: "b64_json",
-    }),
-    signal: AbortSignal.timeout(90_000),
-  });
-
-  if (!response.ok) {
-    const body = await response.text();
-    const error = `Image API ${response.status}: ${body.slice(0, 300)}`;
-    await logGeneration({
-      communityId: input.communityId,
-      postId: input.postId,
-      jobId: input.jobId,
-      type: "image",
-      provider: settings.provider,
-      model: settings.imageModel,
-      prompt: input.prompt,
-      result: "",
-      costUsd: 0,
-      status: "error",
-      error,
-    });
-    throw new Error(error);
-  }
-
-  const payload = (await response.json()) as { data?: Array<{ b64_json?: string }> };
-  const b64 = payload.data?.[0]?.b64_json;
-  if (!b64) throw new Error("Провайдер не вернул изображение");
-
-  const bytes = Uint8Array.from(atob(b64), (char) => char.charCodeAt(0));
-  const uploaded = await uploadObject({ folder: "generated", bytes, mime: "image/png", extension: "png" });
-
-  await logGeneration({
+  const estimatedCost = estimateImageCostUsd(settings);
+  budgetGuard(settings, estimatedCost);
+  const base = normalizedBaseUrl(settings.baseUrl);
+  const referenceNote = input.referenceUrls?.length
+    ? "Текущий адаптер не передаёт референсы изображений провайдеру; точное сходство не гарантируется."
+    : undefined;
+  const logBase: GenerationLogRow = {
     communityId: input.communityId,
     postId: input.postId,
     jobId: input.jobId,
@@ -351,21 +478,47 @@ export async function generateImageWithAi(
     provider: settings.provider,
     model: settings.imageModel,
     prompt: input.prompt,
-    result: uploaded.path,
-    costUsd: 0.04,
-    status: "done",
-  });
-
-  return {
-    path: uploaded.path,
-    model: settings.imageModel,
-    costUsd: 0.04,
-    provider: settings.provider,
-    demo: false,
-    note: input.referenceUrls?.length
-      ? "Провайдер не гарантирует точное сохранение внешности по референсам."
-      : undefined,
+    result: "",
+    costUsd: estimatedCost,
+    costEstimated: true,
+    status: "error",
   };
-}
 
-export { illustrationPrompt };
+  try {
+    const bytes = await requestCompatibleImage({
+      fetcher: runtime.fetcher,
+      baseUrl: base,
+      apiKey: key,
+      model: settings.imageModel,
+      prompt: input.prompt,
+      estimatedCostUsd: estimatedCost,
+      signal: AbortSignal.timeout(90_000),
+    });
+    const uploaded = await runtime.uploadImage(bytes, "image/png", "png");
+    const costUsd = Math.max(settings.imagePriceUsd, 0);
+
+    let logWarning: string | undefined;
+    try {
+      await runtime.logGeneration({ ...logBase, result: uploaded.path, costUsd, costEstimated: true, status: "done" });
+    } catch {
+      // Do not spend again merely because the audit row could not be persisted.
+      logWarning = "Ответ AI получен, но запись журнала не удалась; проверьте лимит расходов вручную.";
+    }
+    settings.spendUsd += costUsd;
+    return {
+      path: uploaded.path,
+      model: settings.imageModel,
+      costUsd,
+      costEstimated: true,
+      provider: settings.provider,
+      demo: false,
+      note: [referenceNote, "Стоимость изображения рассчитана по тарифу из настроек; сверяйте её со счётом.", logWarning].filter(Boolean).join(" "),
+    };
+  } catch (error) {
+    const message = redactError(error instanceof Error ? error.message : String(error), key);
+    const costUsd = isAiCallError(error) ? error.costUsd : estimatedCost;
+    await logFailedCall(runtime, { ...logBase, costUsd }, message);
+    if (error instanceof AiCallError) throw new AiCallError(message, costUsd);
+    throw new AiCallError(`Не удалось выполнить запрос изображения: ${message}`, costUsd);
+  }
+}

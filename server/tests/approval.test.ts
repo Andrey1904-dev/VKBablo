@@ -65,6 +65,43 @@ test("после повторного одобрения dry-run планиро�
   assert.ok(scheduled.vkPostId?.startsWith("test_"));
 });
 
+test("local text/image modes preserve untouched components and invalidate approval", async () => {
+  openMemoryDb();
+  seedCore();
+  const scheduledAt = slotTomorrow("13:30");
+  const full = await generateForSlot({ communityId: "stories", scheduledAt });
+  const owner = createUser("partial-generation@example.com", "super-secret-pass", "Owner");
+  approvePost(full.id, owner.id);
+
+  const textOnly = await generateForSlot({
+    communityId: "stories",
+    scheduledAt,
+    kind: "text",
+    prompt: "Сделай тон добрее",
+    force: true,
+  });
+  assert.equal(textOnly.imagePath, full.imagePath);
+  assert.equal(textOnly.title, full.title);
+  assert.equal(textOnly.topic, full.topic);
+  assert.equal(textOnly.status, "review");
+  assert.equal(textOnly.approvedHash, null);
+
+  const imageOnly = await generateForSlot({
+    communityId: "stories",
+    scheduledAt,
+    kind: "image",
+    prompt: "Тёплый вечерний свет",
+    force: true,
+  });
+  assert.equal(imageOnly.text, textOnly.text);
+  assert.equal(imageOnly.title, textOnly.title);
+  assert.equal(imageOnly.topic, textOnly.topic);
+  assert.notEqual(imageOnly.imagePath, textOnly.imagePath);
+  assert.match(imageOnly.imagePrompt, /Тёплый вечерний свет/);
+  assert.equal(imageOnly.approvedHash, null);
+  assert.equal(imageOnly.testMode, true);
+});
+
 test("слоты Москвы 13:30 17:30 21:30", () => {
   const iso = moscowSlotIso("2026-10-15", "13:30");
   const p = moscowParts(iso);
@@ -72,6 +109,29 @@ test("слоты Москвы 13:30 17:30 21:30", () => {
   assert.equal(p.dateStr, "2026-10-15");
   const iso2 = moscowSlotIso("2026-10-15", "21:30");
   assert.equal(moscowParts(iso2).timeStr, "21:30");
+});
+
+test("force regeneration cannot overwrite a scheduled post", async () => {
+  openMemoryDb();
+  seedCore();
+  const owner = createUser("scheduled-safety@example.com", "super-secret-pass", "Owner");
+  const post = await generateForSlot({
+    communityId: "stories",
+    scheduledAt: slotTomorrow("13:30"),
+  });
+  approvePost(post.id, owner.id);
+  const scheduled = await scheduleToVk(post.id, owner.id);
+  assert.equal(scheduled.status, "scheduled");
+  await assert.rejects(
+    () => generateForSlot({
+      communityId: "stories",
+      scheduledAt: post.scheduledAt,
+      kind: "full_post",
+      force: true,
+    }),
+    /нельзя генерировать заново/i,
+  );
+  assert.equal(getPost(post.id).status, "scheduled");
 });
 
 test("идемпотентность слота: повторная генерация не плодит дубли", async () => {

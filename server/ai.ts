@@ -4,6 +4,8 @@ import { generateIdea, generateText, ruleCheck, type Idea } from "./content.ts";
 import { illustrationPrompt, makeIllustration } from "./images.ts";
 import { findSimilar } from "./similarity.ts";
 import type { AiProviderId, CommunityId } from "../shared/types.ts";
+import { assertBudgetAvailable, paidAiCallAllowed } from "../shared/ai-safety.ts";
+import { ProviderRequestError, requestCompatibleImage, requestCompatibleText } from "../shared/ai-provider.ts";
 
 export interface TextGenInput {
   communityId: CommunityId;
@@ -26,7 +28,8 @@ export interface AiAdapter {
   id: AiProviderId;
   label: string;
   supportsReferences: boolean;
-  generateText(input: TextGenInput): Promise<{ text: string; model: string; costUsd: number }>;
+  limitations: string[];
+  generateText(input: TextGenInput): Promise<{ text: string; model: string; costUsd: number; warning?: string }>;
   generateImage(input: ImageGenInput): Promise<{
     path: string;
     model: string;
@@ -39,6 +42,7 @@ const testAdapter: AiAdapter = {
   id: "test",
   label: "Тестовый движок (без внешних API)",
   supportsReferences: false,
+  limitations: ["Тестовый движок детерминированный; референсы не передаются и сходство не гарантируется."],
   async generateText(input) {
     const idea = input.idea ?? generateIdea(input.communityId, [], input.seed);
     const text = generateText(input.communityId, idea, input.seed);
@@ -60,94 +64,166 @@ const testAdapter: AiAdapter = {
   },
 };
 
-async function openaiCompatible(
-  kind: "openai" | "compatible",
-): Promise<AiAdapter> {
+function normalizedAiBaseUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("AI_BASE_URL должен быть корректным HTTPS URL; платный вызов заблокирован.");
+  }
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
+    throw new Error("AI_BASE_URL должен использовать HTTPS и не содержать credentials/query; платный вызов заблокирован.");
+  }
+  return url.toString().replace(/\/$/, "");
+}
+
+function redactAiError(message: string, key: string): string {
+  return message.replace(/Bearer\s+[^\s"']+/gi, "Bearer [REDACTED]").split(key).join("[REDACTED]").slice(0, 500);
+}
+
+const MAX_TEXT_TOKENS = 900;
+
+export function estimateTextCostUsd(system: string, user: string, provider: string): number {
+  const rate = provider === "openai" ? 0.001 : 0.01;
+  const tokens = Math.ceil((system.length + user.length) / 2) + MAX_TEXT_TOKENS;
+  return tokens * rate / 1000;
+}
+
+export function estimateImageCostUsd(provider: string): number {
+  return provider === "test" ? 0 : 0.1;
+}
+
+async function openaiCompatible(kind: "openai" | "compatible"): Promise<AiAdapter> {
   return {
     id: kind,
     label: kind === "openai" ? "OpenAI" : "Совместимый API",
     supportsReferences: false,
+    limitations: ["Текущий адаптер не передаёт изображения-референсы; точное сходство персонажей не гарантируется.", "Каждая публикация требует ручного одобрения."],
     async generateText(input) {
       const key = getAiKey();
       if (!key) throw new Error("Не задан ключ AI API");
       const model = setting("ai_text_model", "gpt-4o-mini");
-      const base = (setting("ai_base_url") || "https://api.openai.com/v1").replace(/\/$/, "");
-      const res = await fetch(`${base}/chat/completions`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${key}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+      const base = normalizedAiBaseUrl(setting("ai_base_url") || "https://api.openai.com/v1");
+      const pricePer1kTokensUsd = kind === "openai" ? 0.001 : 0.01;
+      const estimatedCost = estimateTextCostUsd(input.system, input.user, kind);
+      assertBudget(estimatedCost);
+      let result: Awaited<ReturnType<typeof requestCompatibleText>>;
+      try {
+        result = await requestCompatibleText({
+          fetcher: (...args) => fetch(...args),
+          baseUrl: base,
+          apiKey: key,
           model,
-          temperature: 0.85,
-          messages: [
-            { role: "system", content: input.system },
-            { role: "user", content: input.user },
-          ],
-        }),
-        signal: AbortSignal.timeout(60_000),
-      });
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(`AI API ${res.status}: ${t.slice(0, 400)}`);
+          system: input.system,
+          user: input.user,
+          maxTokens: MAX_TEXT_TOKENS,
+          pricePer1kTokensUsd,
+          estimatedCostUsd: estimatedCost,
+          signal: AbortSignal.timeout(60_000),
+        });
+      } catch (error) {
+        const message = redactAiError(error instanceof Error ? error.message : String(error), key);
+        const costUsd = error instanceof ProviderRequestError ? error.costUsd : estimatedCost;
+        try {
+          logGeneration({
+            communityId: input.communityId,
+            type: "text",
+            provider: kind,
+            model,
+            prompt: `SYSTEM:\n${input.system}\n\nUSER:\n${input.user}`,
+            result: "",
+            costUsd,
+            status: "error",
+            error: message,
+          });
+        } catch {
+          // Preserve the provider error; do not accidentally replace it with a logging error.
+        }
+        const chargedError = new Error(message) as Error & { costUsd: number };
+        chargedError.costUsd = costUsd;
+        throw chargedError;
       }
-      const data = (await res.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
-        usage?: { prompt_tokens?: number; completion_tokens?: number };
-      };
-      const text = data.choices?.[0]?.message?.content?.trim();
-      if (!text) throw new Error("Пустой ответ модели");
-      const cost =
-        ((data.usage?.prompt_tokens ?? 0) * 0.15 + (data.usage?.completion_tokens ?? 0) * 0.6) /
-        1_000_000;
-      return { text, model, costUsd: cost };
+      let warning: string | undefined;
+      try {
+        logGeneration({
+          communityId: input.communityId,
+          type: "text",
+          provider: kind,
+          model,
+          prompt: `SYSTEM:\n${input.system}\n\nUSER:\n${input.user}`,
+          result: result.text,
+          costUsd: result.costUsd,
+          status: "done",
+        });
+      } catch {
+        warning = "Ответ AI получен, но журнал стоимости не записался; проверьте расходы вручную.";
+      }
+      return { text: result.text, model, costUsd: result.costUsd, warning };
     },
     async generateImage(input) {
       const key = getAiKey();
       if (!key) throw new Error("Не задан ключ AI API");
-      const model = setting("ai_image_model", "dall-e-3");
-      const base = (setting("ai_base_url") || "https://api.openai.com/v1").replace(/\/$/, "");
-      if (input.referenceUrls?.length) {
-        // OpenAI images API does not reliably lock a character from refs in all models.
-        // We still generate, but callers must surface this limitation.
-      }
-      const res = await fetch(`${base}/images/generations`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${key}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+      const model = setting("ai_image_model", "gpt-image-1");
+      const base = normalizedAiBaseUrl(setting("ai_base_url") || "https://api.openai.com/v1");
+      const estimatedCost = estimateImageCostUsd(kind);
+      assertBudget(estimatedCost);
+      let bytes: Uint8Array;
+      try {
+        bytes = await requestCompatibleImage({
+          fetcher: (...args) => fetch(...args),
+          baseUrl: base,
+          apiKey: key,
           model,
           prompt: input.prompt,
-          size: "1024x1024",
-          response_format: "b64_json",
-          n: 1,
-        }),
-        signal: AbortSignal.timeout(90_000),
-      });
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(`Image API ${res.status}: ${t.slice(0, 400)}`);
+          estimatedCostUsd: estimatedCost,
+          signal: AbortSignal.timeout(90_000),
+        });
+      } catch (error) {
+        const message = redactAiError(error instanceof Error ? error.message : String(error), key);
+        const costUsd = error instanceof ProviderRequestError ? error.costUsd : estimatedCost;
+        try {
+          logGeneration({
+            communityId: input.communityId,
+            type: "image",
+            provider: kind,
+            model,
+            prompt: input.prompt,
+            result: "",
+            costUsd,
+            status: "error",
+            error: message,
+          });
+        } catch {
+          // Preserve the provider error; do not accidentally replace it with a logging error.
+        }
+        const chargedError = new Error(message) as Error & { costUsd: number };
+        chargedError.costUsd = costUsd;
+        throw chargedError;
       }
-      const data = (await res.json()) as { data?: Array<{ b64_json?: string; url?: string }> };
-      const b64 = data.data?.[0]?.b64_json;
-      if (!b64) throw new Error("Изображение не получено");
-      const buf = Buffer.from(b64, "base64");
       const { writeFileSync } = await import("node:fs");
       const { join } = await import("node:path");
       const { UPLOAD_DIR } = await import("./db.ts");
       const name = `${nid("ai")}.png`;
-      writeFileSync(join(UPLOAD_DIR, name), buf);
-      return {
-        path: `/uploads/${name}`,
-        model,
-        costUsd: 0.04,
-        note: input.referenceUrls?.length
-          ? "Выбранный провайдер не гарантирует точное сохранение внешности по референсам."
-          : undefined,
-      };
+      writeFileSync(join(UPLOAD_DIR, name), Buffer.from(bytes));
+      const referenceNote = input.referenceUrls?.length
+        ? "Текущий адаптер не передаёт референсы изображений провайдеру; точное сходство не гарантируется."
+        : "Стоимость рассчитана по консервативному тарифу; сверяйте её со счётом провайдера.";
+      let logWarning = "";
+      try {
+        logGeneration({
+          communityId: input.communityId,
+          type: "image",
+          provider: kind,
+          model,
+          prompt: input.prompt,
+          result: `/uploads/${name}`,
+          costUsd: estimatedCost,
+          status: "done",
+        });
+      } catch {
+        logWarning = " Журнал стоимости не записался; проверьте расходы вручную.";
+      }
+      return { path: `/uploads/${name}`, model, costUsd: estimatedCost, note: `${referenceNote}${logWarning}` };
     },
   };
 }
@@ -173,7 +249,9 @@ export function saveAiKey(plain: string | null) {
 export async function getAdapter(): Promise<AiAdapter> {
   const id = (setting("ai_provider", "test") || "test") as AiProviderId;
   if (id === "openai" || id === "compatible") {
-    if (!getAiKey()) return testAdapter;
+    if (!paidAiCallAllowed(id, setting("ai_paid_calls_enabled", "false").toLowerCase() === "true", Boolean(getAiKey()))) {
+      return testAdapter;
+    }
     return openaiCompatible(id);
   }
   return testAdapter;
@@ -191,11 +269,12 @@ export function monthSpendUsd(): number {
 }
 
 export function assertBudget(extra = 0) {
+  const provider = setting("ai_provider", "test");
+  const enabled = setting("ai_paid_calls_enabled", "false").toLowerCase() === "true";
+  if (!paidAiCallAllowed(provider, enabled, Boolean(getAiKey()))) return;
   const limit = Number(setting("ai_monthly_limit_usd", "20"));
-  if (limit <= 0) return;
-  if (monthSpendUsd() + extra >= limit) {
-    throw new Error(`Достигнут лимит расходов на AI: $${limit} в месяц`);
-  }
+  const spend = monthSpendUsd();
+  assertBudgetAvailable(spend, limit, extra);
 }
 
 export function logGeneration(row: {
