@@ -1,300 +1,126 @@
-# VKBablo — пошаговая передача Codex
+# VKBablo — проверенный тестовый backend и дальнейшая настройка
 
-Дата актуальности: 15 октября 2026. Основание: merge commit `8a66a0e` (PR #11 уже слит в `main`). Follow-up ведётся только в закреплённой ветке `arena/edb22162-vkbablo`; PR [#12](https://github.com/Andrey1904-dev/VKBablo/pull/12) открыт, CI `test` checks прошли. Merge PR #11 и открытый PR #12 не означают, что миграции или Edge Functions применены к реальному Supabase project.
+Актуально на 15 октября 2026. Проверена основа main `9bdb5a0` плюс локальные исправления ветки `codex/verified-supabase-backend`. PR #11 и #12 уже MERGED. Прежние указания о закреплённой Arena-ветке устарели. Фактический аудит: AUDIT_REPORT.md; текущая передача: HANDOFF.md.
 
-## Жёсткие ограничения
+## Что уже сделано
 
-- Не добавлять Cloudflare, не переписывать проект и не переделывать дизайн.
-- Не помещать секреты в Git, issue, URL, Vite-переменные, browser storage или логи.
-- Не создавать production-аккаунт/владельца без разрешения оператора.
-- Не делать реальный `wall.post`, `wall.delete` или платный AI-запрос во время проверки.
-- Сохранить ручное одобрение каждой конкретной версии поста.
-- `test_mode`/dry-run нельзя считать успешной интеграцией. В рамках этого follow-up подключённый Supabase не проверялся; не считать новые forward migrations применёнными или Edge Functions развёрнутыми без проверки конкретного проекта.
-- Локальный Node/SQLite backend принудительно работает только в test/dry-run. Для real VK предназначен только защищённый Supabase worker.
+Только тестовый проект `rxzpgxejhfubenllfrpb`, URL `https://rxzpgxejhfubenllfrpb.supabase.co`. Перед изменениями подтверждено отсутствие public tables, Auth users и Storage данных. Применены 19 migrations, развёрнуты vk-ai-api/vk-ai-worker v3. Проверены реальный Auth login, RLS/роли, private media, byte hash approval, worker health, тестовый publication cycle, recovery, budget race и Cron с изменением очереди.
 
-## 0. Локальные проверки перед настройкой облака
+Предохранители оставлены: app_mode=test, real_publish_enabled=false, ai_paid_calls_enabled=false, ai_provider=test. Не подключать VK tokens/paid AI и не менять тариф. Test image adapter выдаёт SVG; для approval загрузить PNG/JPEG. Автоматического approval нет. Слоты четырёх сообществ: 13:30, 17:30, 21:30 Europe/Moscow. Суточная производительность не доказана.
 
-Выполнить из корня репозитория:
+## Локальный frontend
 
-```bash
+Clone находится в `work/VKBablo` папки этого чата. Выполнять команды из корня clone. Ignored `.env.local` уже настроен:
+
+```dotenv
+VITE_SUPABASE_URL=https://rxzpgxejhfubenllfrpb.supabase.co
+VITE_SUPABASE_ANON_KEY=sb_publishable_wwi8T0SLJzEV8TV2JzrvUw_U2IuTf_n
+VITE_BACKEND_MODE=supabase
+VITE_USE_HASH_ROUTER=true
+```
+
+```sh
+npm run dev:web
+```
+
+Тестовый owner — andrey1904dev@icloud.com. Случайный пароль сохранён локально в `.verification/owner.json` с правами 600, этот файл исключён из Git через `.git/info/exclude`. Открывать его только локально; не присылать в чат и не добавлять в Git. Bootstrap уже завершён; повторно запускать его не нужно, OWNER_SETUP_SECRET удалён из Edge Secrets. Local .env.local содержит только публичные переменные, не серверные secrets.
+
+## Доступ Supabase и миграции
+
+CLI уже авторизован через браузерную сессию нужного аккаунта. Если доступ потерян, выполнить интерактивно:
+
+```sh
+supabase login --agent no --output-format text
+supabase projects list
+supabase link --project-ref rxzpgxejhfubenllfrpb
+```
+
+Не передавать token/DB password/service-role в чат. `supabase db query --linked` использует административный доступ Management API и не требует пересылать пароль БД. Вручную вызывать `security find-generic-password` не нужно: это может вызвать запрос macOS Keychain password. CLI использует штатное сохранённое разрешение.
+
+Перед любыми изменениями сверять `supabase/.temp/project-ref`. Не изменять другие проекты. Для текущего deployment:
+
+```sh
+supabase migration list --linked
+supabase db push --dry-run
+node scripts/apply-test-migrations.mjs
+```
+
+У текущего проекта pending migrations нет. Уже применённые файлы не переписывать. Исправления оформлять новыми forward migrations.
+
+Для воспроизводимого fresh install именно этого разрешённого тестового проекта предусмотрен `node scripts/apply-test-migrations.mjs --apply`. По умолчанию скрипт только показывает план, проверяет ref/remote history и отказывается от пустой истории с существующими данными. Он исполняет каждый исходный файл с deferred function validation и атомарной записью migration history, сохраняя оригинальные bytes в statements. Это необходимо из-за historical core/RPC forward references; один ранний SET в отдельной migration не переносится через сбросы CLI session. Существующий backend не сбрасывать ради повторения установки.
+
+После apply обязательно db lint и SQL fixtures. Список всех 19 фактически применённых migration identifiers есть в AUDIT_REPORT.md. Core/RPC в этой сессии реально исполнены Management SQL, остальные — CLI; dry-run не выдаётся за исполнение.
+
+## Повторные проверки
+
+```sh
 npm ci
 npm run typecheck
 npm test
-npm run build
-npm run build:pages
-node scripts/sync-shared.mjs --check
-```
-
-Ожидаемый результат: все команды завершились с кодом 0; `npm test` не вызывает real API. Проверьте, что `.env` игнорируется Git и в `VITE_*` нет service-role key, VK/AI key, `OWNER_SETUP_SECRET` или `WORKER_SECRET`.
-
-## 1. Создать отдельный Supabase project
-
-**Действие:** в Supabase Dashboard создать отдельный проект для тестирования (регион выбрать согласно требованиям владельца), сохранить project ref. Не использовать production DB для первичной проверки.
-
-**Проверка:** открыть Project Settings → API и убедиться, что URL и publishable/anon key принадлежат именно этому тестовому проекту. Service-role key оставить только в защищённом серверном хранилище.
-
-CLI-проверка проекта:
-
-```bash
-supabase --version
-supabase login
-supabase projects list
-```
-
-Ожидаемый результат: CLI авторизован интерактивно, нужный project ref присутствует. Не передавать login token в чат или репозиторий.
-
-## 2. Привязать проект и применить миграции по порядку
-
-Из корня репозитория:
-
-```bash
-supabase link --project-ref "$SUPABASE_PROJECT_REF"
-supabase migration list --linked
-supabase db push --dry-run
-```
-
-Сверить выбранный project ref и полный план до применения. Требуемый порядок — лексикографический по timestamp:
-
-1. `20261014120000_core_schema.sql`
-2. `20261014120100_rls_policies.sql`
-3. `20261014120200_rpc_functions.sql`
-4. `20261014120300_seed.sql`
-5. `20261014120400_cron.sql`
-6. `20261014120500_vk_publication_safety.sql`
-7. `20261014120600_ai_generation_safety.sql`
-8. `20261014120700_generation_mode_safety.sql`
-9. `20261014120800_owner_bootstrap_safety.sql`
-10. `20261015100000_ai_budget_reservations.sql`
-11. `20261015101000_schedule_sync_safety.sql`
-12. `20261015102000_media_approval_integrity.sql` — media byte SHA-256, повторное одобрение прежних approvals, блокировка overwrite и финальная digest-проверка публикации.
-13. `20261015103000_owner_editor_boundaries.sql` — строгий owner/editor раздел, RLS/RPC/Storage права и fail-closed route mapping.
-
-Если dry-run показывает неожиданный `DROP`, изменение существующей миграции, иной проект или неизвестный статус — **остановиться** и выяснить причину. Уже применённые миграции не редактировать: последующие исправления — новой миграцией.
-
-После ручного подтверждения target project:
-
-```bash
-supabase db push
-supabase migration list --linked
-```
-
-Ожидаемый результат: миграции `20261014120000`–`20261015103000` отмечены применёнными в том же порядке. Перед apply отдельно проверить переход старых `approved`/`scheduled` постов в `review` и дубликаты `(media_assets.bucket, media_assets.path)`: старые approvals намеренно требуют повторной загрузки/одобрения, а duplicate paths могут помешать уникальному индексу. Никакие таблицы/данные другого проекта не менялись.
-
-## 3. Проверить PostgreSQL, Auth и RLS
-
-SQL-проверки в SQL Editor или через `psql "$DATABASE_URL"`:
-
-```sql
-select tablename
-from pg_tables
-where schemaname = 'public' and not rowsecurity
-order by tablename;
-
-select schemaname, tablename, policyname, roles, cmd
-from pg_policies
-where schemaname in ('public', 'storage')
-order by schemaname, tablename, policyname;
-
-select app.content_hash('stories', 'Проверка', null, now());
-```
-
-Ожидаемый результат: у пользовательских таблиц нет неожиданно выключенного RLS; `anon` не имеет прямого доступа; мутации проходят только через ограниченные RPC/Edge проверки. Просмотреть политики `media` отдельно и подтвердить, что bucket приватный. Наличие RLS само по себе не доказывает корректность каждой политики.
-
-Проверки SQL и фикстур:
-
-```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/hash.sql
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/ai_budget.sql
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/schedule_sync.sql
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/security_boundaries.sql
-```
-
-`ai_budget.sql` работает внутри транзакции и откатывает тестовые настройки. Это всё равно надо выполнить на отдельной тестовой БД. Для реальной конкуренции (две независимые PostgreSQL-сессии; только reservation RPC, без AI/VK HTTP) использовать **только disposable БД**:
-
-```bash
-DATABASE_URL='postgresql://…' \
-VKBABLO_DISPOSABLE_DB_CONFIRM=I_UNDERSTAND \
-npm run test:ai-budget-concurrency
-```
-
-Скрипт временно меняет `app_mode`, `ai_paid_calls_enabled`, `ai_monthly_limit_usd`, затем восстанавливает их и освобождает только собственные резервы, для которых не было внешнего вызова. Не запускать на production или параллельно с рабочим AI worker.
-
-В Supabase Dashboard → Authentication:
-
-- отключить публичную регистрацию и провайдеры, которые не нужны;
-- проверить redirect URL для `https://andrey1904-dev.github.io/VKBablo/`;
-- убедиться, что пользователь без профиля/owner роли не получает доступ к owner RPC.
-
-Ожидаемый результат: обычный `anon` не читает данные, зарегистрироваться публично нельзя, роль берётся из серверного профиля, а не из клиентского payload. `owner` — только владелец; `editor` читает/меняет разрешённые операционные данные, но не `integration_status`, `application_settings`, аудит, ключи или owner-only publication controls. Профиль другого пользователя виден только owner; editor видит только собственный профиль. Изменение `profiles.role` не доступно browser update — только доверенному server-role пути; user-management API в приложении пока отсутствует.
-
-## 4. Настроить серверные secrets и создать первого владельца через CLI
-
-В Dashboard → Edge Functions → Secrets задать только необходимые значения: `ENCRYPTION_KEY` (случайные 32+ символа), `WORKER_SECRET` (случайные 32+ символа), `OWNER_SETUP_SECRET` (одноразовый секрет 32–256 символов), `APP_ORIGINS`. `SUPABASE_URL`/service role используются функциями как платформенные серверные значения. Не создавать переменные `VITE_*` для этих секретов.
-
-Деплой функций см. шаг 5. После него запустить на защищённой операторской машине в интерактивном терминале:
-
-```bash
-export SUPABASE_URL='https://<project-ref>.supabase.co'
-export SUPABASE_ANON_KEY='<public-anon-key>'
-node scripts/bootstrap-owner.mjs
-```
-
-Скрипт сам запросит email/имя; пароль и setup secret вводятся без отображения. Не передавать их аргументами командной строки. Если есть timeout/unknown outcome — не повторять bootstrap вслепую; сначала сверить Supabase Auth и `public.owner_bootstrap_state`.
-
-Ожидаемый результат: первый профиль создан с ролью `owner`, публичное signup остаётся выключено. Проверить обычный вход через UI и запрос `get_settings()` как владелец. Повторное создание другого владельца должно быть заблокировано.
-
-## 5. Развернуть Edge Functions
-
-```bash
-supabase functions deploy vk-ai-api
-supabase functions deploy vk-ai-worker
-supabase functions list
-```
-
-Ожидаемый результат: обе функции `ACTIVE`. `supabase/config.toml` отключает встроенную JWT-проверку для этих функций, поэтому внутри API обязательны свои проверки: JWT из профиля и owner/editor route allowlist; одноразовый bootstrap secret защищает только bootstrap. Worker принимает только `WORKER_SECRET`. Не удалять эти проверки и не трактовать `verify_jwt = false` как защиту.
-
-**Безопасная health-проверка:** owner через UI выбирает Settings → «Проверить worker» (API route `settings/test-worker`). Функция отправляет worker task `health` с серверным `WORKER_SECRET`. Ожидается `ok:true`, `result.queueTouched:false`, `result.database:"reachable"`. Health читает доступность `application_settings`, не делает queue claim, planner или generation. Это не полностью read-only: после проверки worker пытается записать `worker_run` в `audit_logs` (ошибка этой best-effort записи не отменяет успешный health). Не отправляйте `WORKER_SECRET` в browser/чат/CLI логи.
-
-## 6. Настроить Cron
-
-Миграция `20261014120400_cron.sql` регистрирует `pg_cron` задания; URL и секрет воркера читаются из Vault (`vk_ai_worker_url`, `vk_ai_worker_secret`). В Dashboard → Vault добавить значения только для своего тестового проекта.
-
-Сначала проверьте регистрацию и SQL-вызовы:
-
-```sql
-select jobid, jobname, schedule, active, command from cron.job order by jobname;
-select jobid, status, return_message, start_time, end_time
-from cron.job_run_details order by start_time desc limit 30;
-```
-
-`cron.job` подтверждает только регистрацию расписания. `cron.job_run_details` показывает выполнение SQL-команды, которая делает асинхронный `net.http_post`; сам по себе он не доказывает доставку запроса Edge worker-у.
-
-Для фактической цепочки смотрите owner-only audit trail:
-
-```sql
-select created_at, action, result, details->>'task' as task,
-       details->>'requestId' as request_id, details->>'source' as source
-from public.audit_logs
-where action in ('cron_dispatch','worker_run','cron_skip')
-order by created_at desc limit 100;
-```
-
-`cron_skip` означает, что не заданы URL/`pg_net`/секрет; `cron_dispatch` означает, что pg_net принял запрос на отправку. В `net._http_response` сопоставьте `request_id`: HTTP 2xx и `worker_returned_ok=true` подтверждают, что Edge handler ответил `{ok:true}` (данные ответа не выводятся). `worker_run` с `details.source = 'pg_cron'` — дополнительное положительное подтверждение, что handler выполнился; worker пишет этот audit event best-effort, поэтому отсутствие строки не доказывает, что HTTP handler не работал. Ответы pg_net могут удаляться retention cleanup. Для проверки фактической обработки очереди отдельно сверяйте generation/publication job records по времени и task; health task специально очередь не трогает.
-
-```sql
-select a.created_at, a.details->>'task' as task, r.id,
-       r.status_code, r.timed_out, r.error_msg,
-       coalesce(r.content ~ '"ok"[[:space:]]*:[[:space:]]*true', false) as worker_returned_ok
-from public.audit_logs a
-left join net._http_response r on r.id = (a.details->>'requestId')::bigint
-where a.action = 'cron_dispatch'
-order by a.created_at desc limit 50;
-```
-
-Ожидаемые имена зарегистрированных задач: `vk-ai-worker-tick`, `vk-ai-worker-planner`, `vk-ai-worker-publication`, `vk-ai-worker-stats`, `vk-ai-maintenance`, `vk-ai-requeue-stale`. Если `pg_cron`/`pg_net` недоступны, не заявлять об автоматизации: оставить её выключенной или отдельно согласовать поддерживаемое расписание.
-
-Система действительно умеет **подготавливать** будущие материалы: planner находит слоты, создаёт `full_post` задачи, worker генерирует статус `review`. Это не означает 12 успешно готовых постов при выключенном Cron, ошибке worker, исчерпанном бюджете или существующем ошибочном слоте. Никакая задача не должна автоматически одобрять публикацию.
-
-## 7. Проверить Storage
-
-Migration создаёт bucket `media` приватным и политики для разрешённых ролей. В Dashboard → Storage проверить:
-
-- bucket `media` существует и `Public bucket` выключен;
-- лимит файла 12 MiB;
-- signed URL короткоживущие;
-- прямой `anon` download не работает;
-- upload и signed URL доступны только нужному authenticated/Edge пути.
-
-**Не включать публичность bucket.** Пользовательская загрузка получает новый UUID object path с `upsert=false`; authenticated Storage UPDATE policy отсутствует. У одобренного изображения сохраняется SHA-256 точных байтов; publisher сверяет его до фото/поста VK. После migration существующие `approved`/`scheduled` посты требуют загрузить PNG/JPEG заново и повторить owner approval.
-
-## 8. Подключить AI-провайдера безопасно
-
-В начале оставить `ai_provider=test`, `ai_paid_calls_enabled=false`, `app_mode=test`, месячный лимит положительным. Проверить моками:
-
-```bash
-npm test
-```
-
-Ожидаемый результат: mock transport работает только с `.invalid`, не делает внешних запросов. Секция настроек `Проверить AI` в `test` должна выбрать тестовый движок и не обращаться к платному API.
-
-Для будущего подключения: владелец добавляет серверный ключ через защищённый backend/secret store, проверяет тариф и лимит, затем оператор только после отдельного разрешения может включить платный режим. Перед каждым paid request PostgreSQL `reserve_ai_budget` блокирует текущую UTC budget period; успешный/ошибочный результат фиксируется через `settle_ai_budget`. Потерянный результат оставляет резерв активным и может потребовать ручной сверки со счётом провайдера. **Не освобождать такой резерв только из-за timeout.**
-
-Обязательные проверки до включения: `supabase/tests/ai_budget.sql`, `npm run test:ai-budget-concurrency` на disposable DB, затем ещё раз проверки dry-run. Стоимость остаётся тарифной оценкой, не счётом провайдера; provider может списать больше оценки.
-
-## 9. Подключить VK
-
-Только после успешной RLS/Storage проверки, отдельного разрешения владельца и проверки секретов:
-
-1. Ввести токен сообщества через Supabase UI; он сохраняется сервером в `community_secrets` зашифрованным.
-2. Проверить `groups.getById`/соответствие Group ID через отдельную кнопку «Проверить»; токен не должен возвращаться в ответе.
-3. Оставить `real_publish_enabled=false` и `app_mode=test` во время функциональных проверок.
-4. Не вызывать `wall.post`/`wall.delete` до отдельного разрешения на тестовую публикацию. Local Node backend не подключать к live VK.
-
-Ожидаемый результат на этом шаге — только подтверждённое подключение/проверка группы, не публикация.
-
-## 10. Проверить dry-run и ручное одобрение
-
-На тестовом Supabase проекте:
-
-- оставить `app_mode=test`, `real_publish_enabled=false`, AI paid calls выключенными;
-- подготовить один ближайший тестовый слот;
-- убедиться, что результат `review`, `approved_hash IS NULL`, `test_mode=true` для mock generation;
-- проверить, что `schedule_post` возвращает `dryRun=true`, а publication job имеет `dry_run=true` и `test_…` ID;
-- изменить текст/изображение/время — хэш/одобрение должны сброситься;
-- выполнить owner-only «Проверить worker»: `queueTouched=false`, `generation_jobs`/`publication_jobs` не меняются; worker best-effort пишет `worker_run` в audit log, но отсутствие этой записи само по себе не опровергает успешный health;
-- отменить test/dry-run слот и проверить его статус в БД.
-
-Ожидаемый результат: dry-run не делает запросов к VK и платному AI, неподтверждённая или изменённая версия не публикуется.
-
-## 11. Настроить GitHub Pages на облачный backend
-
-Сначала в репозитории GitHub → Settings → Pages → Source выбрать **GitHub Actions**.
-
-В Settings → Secrets and variables → Actions → **Variables** добавить только публичные:
-
-- `VITE_SUPABASE_URL` = project URL;
-- `VITE_SUPABASE_ANON_KEY` = publishable/anon key;
-- `VITE_BACKEND_MODE` = `auto` (или `supabase` после отдельной проверки).
-
-Это публичные значения: URL и anon key попадут в JavaScript. Service role, `OWNER_SETUP_SECRET`, `WORKER_SECRET`, encryption key, AI/VK tokens туда не помещать. Workflow сначала собирает изолированный demo для безвредного browser smoke, а артефакт deploy собирает с public variables; без variables `auto` остаётся demo. `local` не подходит для Pages.
-
-После push в `main` проверить Actions run `Deploy demo frontend to GitHub Pages`, Pages URL и HTML `meta[name=vkbablo-build]`. Deploy smoke при cloud backend должен оставаться read-only и не создавать пользователя. Проверить RLS, login screen и отсутствие запросов к API до авторизации.
-
-## 12. Проверить одну тестовую публикацию — только после отдельного разрешения
-
-Этот шаг запрещён без отдельного письменного разрешения владельца. Никакие инструкции выше не дают разрешение на реальный VK side effect.
-
-Сначала сделать один тестовый post в тестовом сообществе, выставить время вперёд, пройти вручную approve и перепроверить hash + image. Только оператор после проверки может временно включить `app_mode=approval` и `real_publish_enabled=true`; подтвердить ровно один `wall.post`, сохранить returned VK post ID, затем проверить `wall.delete` на этой тестовой записи и выключить оба флага. Не повторять `wall.post` при timeout/unknown result.
-
-Проверка результата: в `publication_jobs` один `done` job, совпадают `post_id`, `version_hash`, target group, `vk_post_id`; аудит содержит одобрение владельца и успешное завершение. Unknown result означает ручную сверку с VK, не retry.
-
-## 13. Подключить четыре основные сообщества
-
-Только после успешного тестового цикла и отдельного подтверждения владельца подключать по одному:
-
-1. «Ну и история» (`stories`)
-2. «Милана и её деревенский гламур» (`milana`)
-3. «ВСЯ СУТЬ ЖИЗНИ» (`life`)
-4. «Вероника в поиске настоящего мужчины» (`veronica`)
-
-Для каждого сверить Group ID, токен, график 13:30 / 17:30 / 21:30 `Europe/Moscow`, `automation_enabled`, лимиты и ручной approval. Ожидаемая номинальная ёмкость — 3 слота × 4 сообщества = 12 заданий подготовки в сутки. Это **не гарантия 12 опубликованных постов** и не разрешение на автопубликацию.
-
-## Финальный checklist Codex
-
-```bash
-npm run typecheck
-npm test
-npm run build
-npm run build:pages
 npm run check:shared
-node --check scripts/bootstrap-owner.mjs
-npm run test:ai-budget-concurrency   # только disposable PostgreSQL, с явным confirmation
-```
-
-Проверить Edge types статически:
-
-```bash
+npm run build
+VITE_BACKEND_MODE=demo npm run build:pages
+npx playwright install chromium webkit
+# Остановить свой dev server на 5173 перед production smoke.
+CI=true npm run test:browser
 npx --yes deno check supabase/functions/vk-ai-api/index.ts supabase/functions/vk-ai-worker/index.ts
+supabase db lint --linked --level error
 ```
 
-Ожидаемый результат: обе функции проходят Deno type check; это **не** запуск в Supabase Edge runtime. Для SQL: применить миграции до `20261015103000` к отдельному PostgreSQL/Supabase проекту и выполнить все четыре integration fixtures, включая `security_boundaries.sql`; `pglast` внешний parser не проверяет PL/pgSQL execution, а ограниченные PGlite fixtures не заменяют полную схему, grants/RLS и конкурентные транзакции. В финальном отчёте явно перечислить непроведённые PostgreSQL, Edge runtime, browser/WebKit и внешние API проверки.
+Fixtures выполняются последовательно; hash.sql удаляет свои fixtures, остальные откатывают транзакцию:
+
+```sh
+for fixture in hash ai_budget schedule_sync security_boundaries rls_sessions runtime_integrity; do
+  supabase db query --linked --file "supabase/tests/$fixture.sql" || break
+done
+```
+
+Четыре исходных fixtures плюс rls_sessions/runtime_integrity уже реально прошли. RLS sessions используют SET ROLE anon/authenticated и claims реальных профилей; одних admin SELECT недостаточно. Budget fixture задаёт service-role claim и временные настройки только внутри откатываемой транзакции. Оригинальный psql concurrency script изучен; при его будущем запуске нужен DATABASE_URL только локально, disposable guard, остановленный worker, проверка точного ref и cleanup. В этой проверке эквивалентный race выполнен двумя независимыми Management API SQL запросами; 1 accepted, 1 denied. Все тестовые резервы освобождены, режимы/лимит восстановлены. Не повторять такие тесты рядом с рабочим worker или paid keys.
+
+## Edge, Secrets, Auth и Storage
+
+В Edge Secrets настроены ENCRYPTION_KEY, WORKER_SECRET, APP_ORIGINS. Платформенные SUPABASE_URL/ANON/SERVICE_ROLE используются только сервером. OWNER_SETUP_SECRET удалён после bootstrap. VK/AI ключи не подключены. Локальные временные копии серверных secrets после проверок удалены.
+
+При необходимости повторного deployment только этого проекта:
+
+```sh
+supabase functions deploy vk-ai-api --project-ref rxzpgxejhfubenllfrpb
+supabase functions deploy vk-ai-worker --project-ref rxzpgxejhfubenllfrpb
+supabase functions list --project-ref rxzpgxejhfubenllfrpb
+```
+
+verify_jwt=false в config не заменяет внутреннюю авторизацию: API проверяет настоящий JWT и профиль/роль, worker — server secret. Проверять health через owner API route `settings/test-worker` (кнопки worker health в текущем UI нет): API делает явный POST с task=health. Ожидается ok=true, result.queueTouched=false, result.database=reachable. Health не обрабатывает очередь, но пытается писать audit event.
+
+Auth global signup выключен; email provider включён для login. Remote config реально применён, login и signup denial проверены. Redirect URLs добавлены для Pages и localhost. Bucket media приватный, 12 MiB, только signed/authenticated download; Storage UPDATE/upsert для owner/editor запрещён. Upload использует новый UUID path и upsert=false. Approval digest соответствует bytes, изменение post content сбрасывает approval. Старые approvals без digest не считаются пригодными.
+
+## Vault и Cron
+
+Vault vk_ai_worker_url/vk_ai_worker_secret настроены. Шесть штатных jobs активны: tick */5, publication */2, planner на 15-й минуте часа, stats 25 */3, maintenance 00:35 UTC, stale recovery */20. Europe/Moscow применяется при расчёте community slots, не к UTC cron expression.
+
+Проверено фактическое исполнение штатного tick 05:55 UTC: cron succeeded, pg_net request 6 HTTP 200, worker claimed=2/done=2, jobs действительно done. Повторный test tick request 8 в 05:56 тоже обработал два задания; временная minute job после проверки удалена. Регистрация cron.job сама по себе не является доказательством обработки.
+
+Для проверки без вывода secrets:
+
+```sql
+select jobname,schedule,active from cron.job order by jobname;
+select created_at,action,result,details->>'task' task,details->>'requestId' request_id
+from audit_logs where action in ('cron_dispatch','worker_run','cron_skip')
+order by created_at desc limit 30;
+select a.created_at,a.details->>'task' task,r.id,r.status_code,
+       r.content::jsonb#>'{result,generation}' generation
+from audit_logs a join net._http_response r on r.id=(a.details->>'requestId')::bigint
+where a.action='cron_dispatch' order by a.created_at desc limit 10;
+```
+
+Сопоставлять это с generation/publication job records. Unknown remote dispatch не переотправлять: восстановление переводит его в unknown для ручной сверки. В этой проверке реальные внешние запросы не выполнялись.
+
+## GitHub Pages — подготовлено, не опубликовано
+
+При отдельном разрешении пользователя:
+
+1. Settings → Pages → Build and deployment → Source: GitHub Actions.
+2. Repository Actions variables: VITE_SUPABASE_URL — URL выше; VITE_SUPABASE_ANON_KEY — предоставленный publishable key; VITE_BACKEND_MODE=supabase.
+3. Никаких service-role, WORKER_SECRET, ENCRYPTION_KEY, VK/AI keys в VITE_*.
+4. После отдельного разрешения на push/deploy выполнить workflow и проверить live artifact отдельно.
+
+В этой сессии Pages Source, repository variables и deployment не менялись; сайт не публиковался. Workflow запускает demo browser smoke до сборки configured backend, а live verify проверяет отдельный опубликованный artifact. Существующий live smoke не заменяет выполненную здесь отдельную проверку авторизованного cloud UI.

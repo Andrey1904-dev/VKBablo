@@ -53,3 +53,6 @@ begin
 end $$;
 
 rollback;
+
+-- Emit a result after rollback for CLI/Management API clients.
+select 'schedule_sync: PASS (transaction rolled back)' as result;

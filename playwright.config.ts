@@ -34,6 +34,7 @@ export default defineConfig({
   webServer: remoteURL ? undefined : {
     command: "npm run preview:pages -- --strictPort",
     url: "http://127.0.0.1:5173/VKBablo/",
-    reuseExistingServer: !process.env.CI,
+    // Never mistake a development server or stale build for the artifact under test.
+    reuseExistingServer: false,
   },
 });

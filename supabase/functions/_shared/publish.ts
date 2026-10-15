@@ -24,7 +24,8 @@ export interface PublishSettings {
 }
 
 export async function loadPublishSettings(): Promise<PublishSettings> {
-  const { data } = await admin().from("application_settings").select("key, value");
+  const { data, error } = await admin().from("application_settings").select("key, value");
+  if (error) throw new ApiError(503, "Не удалось прочитать предохранители публикации", "settings_unavailable");
   const map = new Map((data ?? []).map((row: { key: string; value: string }) => [row.key, row.value]));
   return {
     mode: map.get("app_mode") ?? "test",

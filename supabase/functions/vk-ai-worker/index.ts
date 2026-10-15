@@ -14,7 +14,7 @@ import { WORKER_SECRET } from "../_shared/env.ts";
 import { constantTimeTextEqual } from "../_shared/core/bootstrap-safety.ts";
 import { isWorkerTask, shouldProcessWorkerQueue, type WorkerTask } from "../_shared/core/worker-safety.ts";
 import { runGenerationJob, type GenerationJob } from "../_shared/jobs.ts";
-import { collectStatistics, markDuePostsPublished, processPublicationJobs } from "../_shared/publish.ts";
+import { collectStatistics, loadPublishSettings, markDuePostsPublished, processPublicationJobs } from "../_shared/publish.ts";
 
 const MAX_RUNTIME_MS = 45_000;
 const MAX_JOBS_PER_RUN = 2;
@@ -81,9 +81,7 @@ async function handle(task: WorkerTask, workerId: string) {
   if (!shouldProcessWorkerQueue(task)) throw new Error(`Unsupported worker task: ${task}`);
 
   const requeued = await callRpc(admin(), "requeue_stale_jobs", { p_stale_seconds: 600 });
-  const publishSettings = (await callRpc<Record<string, unknown>>(admin(), "get_settings")) as {
-    automationPaused?: boolean;
-  };
+  const publishSettings = await loadPublishSettings();
 
   if (publishSettings?.automationPaused) {
     return { task, paused: true, requeued };

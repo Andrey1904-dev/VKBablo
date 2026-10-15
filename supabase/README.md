@@ -1,6 +1,6 @@
 # Supabase: база, безопасность, функции, расписание
 
-Production-контур проекта. Cloudflare не используется нигде: фронтенд публикуется на GitHub Pages,
+Целевая серверная архитектура проекта. Текущий проверенный deployment — только тестовый `rxzpgxejhfubenllfrpb`, 15 октября 2026; runtime evidence и ограничения приведены в `../AUDIT_REPORT.md`. PR #11 и #12 уже объединены. Для fresh install исторических core/RPC используйте guarded installer из `../CODEX_SETUP.md`: обычный db push встречает forward-reference ошибки. Cloudflare не используется нигде: фронтенд публикуется на GitHub Pages,
 вся серверная логика живёт в Supabase (PostgreSQL + RLS + Storage + Auth + Edge Functions + Cron).
 
 Подробная пошаговая инструкция для владельца (macOS, MacBook Air M4) — [`../CODEX_SETUP.md`](../CODEX_SETUP.md).
@@ -107,7 +107,7 @@ Vault-секреты для Cron: `vk_ai_worker_url` (URL функции вор�
 
 ### Worker health — безопасная проверка без queue side effects
 
-Owner использует UI Settings → «Проверить worker» (`settings/test-worker`). API вызывает worker с task `health` и серверным `WORKER_SECRET`. Ожидайте `{ok:true, queueTouched:false, database:"reachable"}`. Handler проверяет чтение `application_settings`; не делает claim/planner/generation и не меняет очередь. После health worker best-effort пытается записать `worker_run` в `audit_logs` (ошибка audit insert не отменяет успешный ответ), поэтому health не следует называть абсолютно read-only. Не передавать секрет в браузер вручную, командную строку или логи.
+Owner вызывает API `settings/test-worker`; кнопки worker health в текущем UI нет. API вызывает worker с task `health` и серверным `WORKER_SECRET`. Ожидайте `{ok:true, queueTouched:false, database:"reachable"}`. Handler проверяет чтение `application_settings`; не делает claim/planner/generation и не меняет очередь. После health worker best-effort пытается записать `worker_run` в `audit_logs` (ошибка audit insert не отменяет успешный ответ), поэтому health не следует называть абсолютно read-only. Не передавать секрет в браузер вручную, командную строку или логи.
 
 ### Как подтвердить реальный Cron → HTTP → worker run
 
@@ -138,4 +138,4 @@ order by a.created_at desc limit 50;
 
 `cron.job` = schedule registered; `cron.job_run_details` = cron SQL invocation only; `cron_dispatch` = pg_net accepted request submission; `net._http_response` with HTTP 2xx and `worker_returned_ok=true` = Edge handler returned `{ok:true}` when response is retained; `worker_run` with `details.source='pg_cron'` is additional positive evidence of handler completion. Worker audit insertion is best-effort, so an absent `worker_run` row alone does not prove handler failure. Correlate by `requestId`. `cron_skip` identifies missing Vault URL/secret or pg_net. To prove actual queue processing, also verify corresponding generation/publication job records; health task intentionally does not touch jobs. No actual Cron run is evidenced until there are corresponding runtime rows.
 
-В UI проверить Auth, private Storage, upload/approval, queue и health. «Проверить AI» в `app_mode=test` должен использовать test adapter и не вызывать платный endpoint.
+В UI проверить Auth, private Storage, upload/approval и queue; health проверить отдельным owner API вызовом. «Проверить AI» в `app_mode=test` должен использовать test adapter и не вызывать платный endpoint.
