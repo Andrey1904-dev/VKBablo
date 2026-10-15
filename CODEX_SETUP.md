@@ -1,6 +1,6 @@
 # VKBablo — пошаговая передача Codex
 
-Дата актуальности: 15 октября 2026. Основание: merge commit `8a66a0e` (PR #11 уже слит в `main`). Follow-up аудит ведётся только в закреплённой ветке `arena/edb22162-vkbablo`; не переключать ветки. Merge PR #11 не означает, что миграции или Edge Functions применены к реальному Supabase project.
+Дата актуальности: 15 октября 2026. Основание: merge commit `8a66a0e` (PR #11 уже слит в `main`). Follow-up ведётся только в закреплённой ветке `arena/edb22162-vkbablo`; PR [#12](https://github.com/Andrey1904-dev/VKBablo/pull/12) открыт, CI `test` checks прошли. Merge PR #11 и открытый PR #12 не означают, что миграции или Edge Functions применены к реальному Supabase project.
 
 ## Жёсткие ограничения
 

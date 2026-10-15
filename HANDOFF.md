@@ -3,7 +3,7 @@
 **Актуально на:** 15 октября 2026
 **Репозиторий:** `Andrey1904-dev/VKBablo`
 **Закреплённая ветка Arena:** `arena/edb22162-vkbablo` — не переключать/не создавать другие ветки; push только в неё.
-**База:** `8a66a0e6031e4cf62ba98f924b7d34b220e8b12e`, merge commit PR #11. PR #11 уже merged; эти follow-up исправления надо публиковать отдельным PR из закреплённой ветки.
+**База:** `8a66a0e6031e4cf62ba98f924b7d34b220e8b12e`, merge commit PR #11. PR #11 уже merged; follow-up отправлен отдельным [PR #12](https://github.com/Andrey1904-dev/VKBablo/pull/12), он `OPEN` и не merged; оба GitHub `test` checks — PASS. Коммиты: `806d09e` (код/миграции/тесты), `d6d9374` (документы).
 **Внешние сервисы:** Supabase, VK и AI не подключались. Реальные публикации, платные вызовы и облачные миграции не выполнялись.
 
 ## 1. Текущий статус
@@ -33,7 +33,7 @@
 4. Не менять уже применённые миграции после deployment; исправления для существующей БД — отдельная forward migration.
 5. Не повторять `wall.post` после unknown result; неизвестный outcome требует ручной сверки с VK.
 6. Не считать UI approval достаточным доказательством: hash/version, image bytes, job snapshot и DB dispatch fence должны совпадать.
-7. Не сливать PR автоматически в `main`. Сохранить изменения отдельными коммитами, push в закреплённую ветку и открыть новый PR без merge.
+7. Не сливать PR автоматически в `main`. Follow-up уже сохранён двумя отдельными коммитами, отправлен в закреплённую ветку, PR #12 открыт без merge. Новые изменения добавлять только в эту ветку.
 
 ## 4. Что изменено в follow-up
 
@@ -99,16 +99,16 @@
 | Auth/RLS/Storage/Edge/Cron runtime | NOT RUN | Подключённых сервисов нет. |
 | VK / paid AI | NOT CALLED | Намеренно не вызываются. |
 | `git diff --check` | PASS | Нет whitespace/conflict-marker ошибок. |
+| GitHub PR #12 checks | PASS, **2/2 `test`** | CI completed; does not run PostgreSQL/Supabase integration. |
 
 ## 7. Следующие действия Codex
 
-1. Прочитать `git status`, весь diff и выполнить `git diff --check`; проверить, что в изменениях нет секретов, изменения TZ или визуального дизайна.
-2. Запустить `npm test`, `npm run typecheck`, `npm run build`, `npm run build:pages`, `npm run check:shared`, Edge static type check и доступный SQL parser; записать exit code и ограничения.
-3. Не считать PGlasT/PGlite заменой реального PostgreSQL. На отдельном disposable Supabase/Postgres применить миграции по timestamp order и выполнить все `supabase/tests/*.sql`, особенно `security_boundaries.sql` и `hash.sql`.
-4. До SQL apply на существующих данных проверить duplicate `(bucket,path)`, а после apply подтвердить invalidation прежних approvals. Не выполнять production rollout в этом задании.
-5. Выполнить независимые authenticated-проверки owner/editor: editor не читает settings/integrations/audit/other profiles и не вызывает owner routes; authenticated не может менять role или overwrite Storage object.
-6. Сохранить изменения отдельными коммитами, push только в `arena/edb22162-vkbablo`, открыть/обновить PR без слияния в `main`.
-7. Передать точный список изменений, commit/PR ссылки и результаты доступных проверок. Явно перечислить остающиеся PostgreSQL/Supabase, Cron runtime, browser/WebKit и live integration tests.
+1. PR [#12](https://github.com/Andrey1904-dev/VKBablo/pull/12) открыт из `arena/edb22162-vkbablo`; CI `test` checks прошли. Не сливать в `main` без отдельной команды.
+2. На disposable Supabase/PostgreSQL применить migrations по timestamp order; до apply проверить duplicate `(bucket,path)`, старые approvals и in-flight/unknown publication jobs. Не применять в production в рамках этого follow-up.
+3. Выполнить все `supabase/tests/*.sql`, особенно `security_boundaries.sql` и `hash.sql`; отдельно проверить owner/editor RLS/ACL, role-change rejection и отсутствие Storage UPDATE/upsert policy от настоящего `authenticated` JWT.
+4. Проверить Cron в disposable project по `CODEX_SETUP.md`: registration, SQL invocation, `requestId`, HTTP `{ok:true}`, best-effort worker audit и реальные generation/publication job records. Health сам очередь не трогает.
+5. Playwright browser assertions заблокированы отсутствующими Chromium/WebKit binaries; установить их и повторить, если нужен browser smoke.
+6. Сохранять новые изменения только в `arena/edb22162-vkbablo`, отдельными коммитами; push только в эту ветку. Не подключать production services, платный AI или live VK.
 
 ## 8. Локальные команды
 

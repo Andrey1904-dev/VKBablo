@@ -2,7 +2,7 @@
 
 **Дата:** 15 октября 2026
 **Рабочая ветка:** `arena/edb22162-vkbablo` (сессионная ветка; не переключать)
-**Основа:** `8a66a0e6031e4cf62ba98f924b7d34b220e8b12e`, merge commit PR #11. `gh pr view 11` подтвердил, что PR #11 уже `MERGED`; эти follow-up изменения ещё не опубликованы в отдельном PR.
+**Основа:** `8a66a0e6031e4cf62ba98f924b7d34b220e8b12e`, merge commit PR #11. PR #11 уже `MERGED`; follow-up опубликован отдельным [PR #12](https://github.com/Andrey1904-dev/VKBablo/pull/12), состояние `OPEN`, GitHub `test` checks — PASS. Коммиты: `806d09e` (код/миграции/тесты), `d6d9374` (документация). PR не объединён.
 **Ограничения:** реальные Supabase/VK/AI сервисы не подключались; платные AI-запросы и публикации VK не выполнялись; дизайн не менялся.
 
 ## 1. Исправления независимого аудита
@@ -71,6 +71,7 @@
 | `pglast` parse | PASS, **17 SQL files** (13 migrations + 4 fixtures) | Проверен внешний SQL grammar, не выполнение PL/pgSQL, grants, RLS или зависимостей в живом Supabase. |
 | `npm run test:browser` | BLOCKED, **15/15** | Playwright Chromium/WebKit binaries отсутствуют; browser assertions не стартовали. |
 | `git diff --check` | PASS | Нет whitespace/conflict-marker ошибок. |
+| GitHub PR #12 checks | PASS, **2/2 `test`** | CI completed; PostgreSQL/Supabase integration не запускалась. |
 | PostgreSQL/Supabase SQL fixtures | NOT RUN | Нет `psql`, Supabase CLI, `DATABASE_URL` и disposable project. |
 | Supabase Auth/RLS/Storage/Cron/Edge deployment | NOT RUN | Внешний сервис не подключался. |
 | VK и paid AI | NOT CALLED | Запрещено текущими ограничениями. |
