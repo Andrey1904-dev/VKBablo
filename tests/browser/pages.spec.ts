@@ -45,7 +45,15 @@ for (const storage of ["available", "denied", "quota-exceeded"] as const) {
         }
       }, storage);
     }
+    const setupState = isSupabasePagesBuild
+      ? page.waitForResponse(response => response.url() === "https://rxzpgxejhfubenllfrpb.supabase.co/functions/v1/vk-ai-api/setup-state")
+      : null;
     await page.goto("./");
+    if (setupState) {
+      const response = await setupState;
+      expect(response.status()).toBe(200);
+      expect(await response.json()).toMatchObject({ hasOwner: true });
+    }
     if (process.env.PAGES_EXPECTED_SHA) {
       // CDN can still serve the previous deployment. Reload until this revision is visible.
       await expect(async () => {
@@ -54,14 +62,14 @@ for (const storage of ["available", "denied", "quota-exceeded"] as const) {
       }).toPass({ timeout: 120_000, intervals: [5000, 10000] });
     }
     await expect(page.getByRole("heading", {
-      name: isSupabasePagesBuild ? /^(Вход в панель|Первичная настройка владельца)$/ : "Создание владельца",
+      name: isSupabasePagesBuild ? "Вход в панель" : "Создание владельца",
       exact: true,
     })).toBeVisible();
     await expect(page.locator(".login-card")).toHaveCSS("background-color", /rgb/);
     expect(await page.locator(".login-card").evaluate((el) => getComputedStyle(el).borderRadius)).not.toBe("0px");
     if (isSupabasePagesBuild) {
       // Read-only cloud smoke only. Never create an Auth account or call any protected API.
-      // Existing test owner must be offered login; bootstrap remains valid for a fresh test DB.
+      // This deployment targets the existing test owner; bootstrap is a failure.
       await expect(page.getByRole("button", { name: "Создать аккаунт", exact: true })).toHaveCount(0);
     } else {
       await page.locator('input[type="email"]').fill("pages-smoke@example.invalid");

@@ -48,7 +48,7 @@ jobs:
           VITE_BACKEND_MODE: ${{ vars.VITE_BACKEND_MODE || 'supabase' }}
           VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
-      # Only public Supabase URL/anon values may enter the client bundle. Empty vars keep demo mode.
+      # Only public Supabase URL/anon values may enter the client bundle. Cloud configuration is validated above; demo must be selected explicitly.
       - name: Build Pages artifact for configured backend
         run: npm run build:pages
         env:

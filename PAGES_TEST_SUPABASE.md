@@ -1,3 +1,11 @@
+> Повторная проверка по новому ТЗ от 15.10.2026: main по-прежнему `aebf07a059a54e2cd9c05fb52efb392abde9c9c7`. Исходный `4726e7e` сохранён в истории. Дополнительно auto без config теперь отклоняется; publishable key закреплён на явно предоставленное публичное значение тестового проекта; smoke требует setup-state 200/hasOwner=true и экран входа. Добавлен unit regression test с 10 вариантами конфигурации. Ниже сохранён предыдущий отчёт; в части старых результатов и допуска bootstrap приоритет имеет это обновление.
+>
+> Повторные проверки: npm ci/typecheck/check:shared/production build/Pages Supabase build PASS; unit 50/50; demo browser 15/15; cloud login-screen smoke 9/9 (Chromium desktop/mobile и iPhone WebKit). Порт 5173 занят существующим сервером: browser smoke использовал временный ignored config на свободном 5175, без переиспользования чужого сервера. npm audit --omit=dev: 0, полный install: прежние 7 advisories. Runtime: настоящий owner login, 4 communities, 13 review; все 4 предохранителя подтверждены; worker health 200/ok=true/database=reachable/queueTouched=false, CORS возвращает origin Pages. Повторные upload/approval/публикации не выполнялись; ранее проверенные три PNG сохранены.
+>
+> Проверка bundle: ожидаемые публичные URL/key присутствуют; пароль owner, sb_secret, private key blocks и service-role JWT отсутствуют. src/shared/supabase/package/lockfile не менялись относительно main. Серверные secrets не читались и не добавлялись. Это проверка конфигурации и шаблонов, а не обещание универсального обнаружения любых секретов.
+>
+> Удалённые variables, push, создание PR, merge и deployment в этой работе не выполнялись: ожидается отдельное разрешение пользователя согласно разделам 5–7 ТЗ.
+
 # Pages → тестовый Supabase: проверка и план
 
 Проверка 15.10.2026. main `aebf07a` (PR #13 merged; #11/#12 входят в историю).
